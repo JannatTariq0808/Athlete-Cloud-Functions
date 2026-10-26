@@ -1,0 +1,10 @@
+{
+  "projects": {
+    "default": "athlete-46037",
+    "athlete": "athlete-46037",
+    "staging": "athlete-staging",
+    "production": "athlete-46037"
+  },
+  "targets": {},
+  "etags": {}
+}
