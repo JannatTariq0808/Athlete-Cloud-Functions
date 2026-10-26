@@ -54,6 +54,8 @@ const {
   isQuarterFirstMonthDeadline,
   parseFitFile,
   getValidAccessToken,
+  GARMIN_RECONNECT_MESSAGE,
+  disconnectGarminUser,
 } = require("./utils");
 
 // For cost control, you can set the maximum number of containers that can be
@@ -3266,39 +3268,25 @@ exports.garminWebhook = onRequest(
             const batchRef = batchSnap.docs[0].ref;
             console.log(`✅ Found batch ${batchRef.id} with no activities`);
 
-            // Deregister from Garmin
-            if (accessToken) {
-              try {
-                await axios.delete(
-                    "https://apis.garmin.com/wellness-api/rest/user/registration",
-                    {
-                      headers: {Authorization: `Bearer ${accessToken}`},
-                    },
-                );
-                console.log(`✅ Deregistered user ${garminUserId} from Garmin`);
-              } catch (err) {
-                console.warn(
-                    "Failed to deregister from Garmin:",
-                    err.response?.data || err.message,
-                );
-              }
+            // Deregister from Garmin, refreshing the token first when possible,
+            // and clear the Garmin data from the user document either way
+            let token = accessToken;
+            try {
+              token = await getValidAccessToken(
+                  userSnap.docs[0], CLIENT_ID.value(), CLIENT_SECRET.value(),
+              );
+            } catch (err) {
+              console.warn(`Could not refresh Garmin token for ${garminUserId}:`, err.message);
             }
-
-            // Clear Garmin data from user document
-            await userRef.update({
-              access_token: admin.firestore.FieldValue.delete(),
-              refresh_token: admin.firestore.FieldValue.delete(),
-              garminUserId: admin.firestore.FieldValue.delete(),
-            });
-
-            console.log(`✅ Cleared Garmin data from user`);
+            const deregistered = await disconnectGarminUser({userRef, accessToken: token});
 
             // Mark batch as error
             await batchRef.update({
               status: "error",
               processedActivities: 0,
-              errorMessage:
-              "No cycling or running activities found in your Garmin account",
+              errorMessage: deregistered ?
+                "No cycling or running activities found in your Garmin account" :
+                GARMIN_RECONNECT_MESSAGE,
               completedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
 
@@ -3429,12 +3417,13 @@ exports.garminWebhook = onRequest(
                 userDoc, CLIENT_ID.value(), CLIENT_SECRET.value(),
             );
           } catch (err) {
-            const detail = err.response?.data?.error || err.message;
-            console.error(`❌ Could not get a valid Garmin token for ${garminUserId}:`, detail);
+            console.error(`❌ Could not get a valid Garmin token for ${garminUserId}:`, err.message);
+            await disconnectGarminUser({userRef, accessToken: user.access_token});
             await batchRef.update({
               status: "error",
               processedActivities: 0,
-              errorMessage: `Garmin token refresh failed: ${detail}`,
+              errorMessage: GARMIN_RECONNECT_MESSAGE,
+              errorDetail: err.message,
               completedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
             continue;
@@ -3443,6 +3432,7 @@ exports.garminWebhook = onRequest(
           // Garmin answers 401 when it no longer accepts the token even if the
           // stored expiry says otherwise, so refresh once more and retry.
           let refreshedAfterRejection = false;
+          let tokenDead = false;
           const fetchActivityFile = async (url) => {
             const get = (token) => axios.get(url, {
               responseType: "arraybuffer",
@@ -3454,9 +3444,14 @@ exports.garminWebhook = onRequest(
               if (err.response?.status !== 401 || refreshedAfterRejection) throw err;
               refreshedAfterRejection = true;
               console.warn("⚠️ Garmin rejected the access token, refreshing once and retrying");
-              accessToken = await getValidAccessToken(
-                  await userRef.get(), CLIENT_ID.value(), CLIENT_SECRET.value(), {force: true},
-              );
+              try {
+                accessToken = await getValidAccessToken(
+                    await userRef.get(), CLIENT_ID.value(), CLIENT_SECRET.value(), {force: true},
+                );
+              } catch (refreshErr) {
+                tokenDead = true;
+                throw refreshErr;
+              }
               return get(accessToken);
             }
           };
@@ -3532,13 +3527,25 @@ exports.garminWebhook = onRequest(
                 batchId: batchRef.id,
                 created_at: admin.firestore.FieldValue.serverTimestamp(),
               });
+
+              if (tokenDead) {
+                console.error("❌ Garmin token is no longer valid, stopping this batch");
+                break;
+              }
             }
           }
 
+          if (tokenDead) {
+            await disconnectGarminUser({userRef, accessToken});
+          }
+
           const hasError = failedCount > 0;
-          const errorMessage = hasError ?
-            `${failedCount} of ${userActivities.length} activities failed to sync` :
-            null;
+          let errorMessage = null;
+          if (tokenDead) {
+            errorMessage = GARMIN_RECONNECT_MESSAGE;
+          } else if (hasError) {
+            errorMessage = `${failedCount} of ${userActivities.length} activities failed to sync`;
+          }
 
           await batchRef.update({
             status: hasError ? "error" : "success",
@@ -4031,6 +4038,7 @@ exports.cleanupStaleBatches = onSchedule(
       schedule: "*/1 * * * *",
       region: "europe-west2",
       timeoutSeconds: 540,
+      secrets: [CLIENT_ID, CLIENT_SECRET],
     },
     async (event) => {
       try {
@@ -4093,6 +4101,7 @@ exports.cleanupStaleBatches = onSchedule(
 
               // Get user reference
               const userId = batchData.userId;
+              let deregistered = false;
 
               if (userId) {
                 try {
@@ -4100,39 +4109,23 @@ exports.cleanupStaleBatches = onSchedule(
 
                   if (userDoc.exists) {
                     const userData = userDoc.data();
-                    const accessToken = userData.access_token;
 
-                    // Deregister from Garmin
-                    if (accessToken) {
-                      try {
-                        await axios.delete(
-                            "https://apis.garmin.com/wellness-api/rest/user/registration",
-                            {
-                              headers: {Authorization: `Bearer ${accessToken}`},
-                            },
-                        );
-                        console.log(
-                            `✅ Deregistered user from Garmin for batch ${batchRef.id}`,
-                        );
-                      } catch (err) {
-                        console.warn(
-                            `Failed to deregister from Garmin for batch ${batchRef.id}:`,
-                            err.response?.data || err.message,
-                        );
-                      // Continue even if deregistration fails
-                      }
+                    // Deregister from Garmin, refreshing the token first when
+                    // possible, and clear the Garmin data from the user either way
+                    let accessToken = userData.access_token;
+                    try {
+                      accessToken = await getValidAccessToken(
+                          userDoc, CLIENT_ID.value(), CLIENT_SECRET.value(),
+                      );
+                    } catch (err) {
+                      console.warn(
+                          `Could not refresh Garmin token for batch ${batchRef.id}:`,
+                          err.message,
+                      );
                     }
-
-                    // Clear Garmin tokens from user document
-                    await userId.update({
-                      access_token: admin.firestore.FieldValue.delete(),
-                      refresh_token: admin.firestore.FieldValue.delete(),
-                      garminUserId: admin.firestore.FieldValue.delete(),
+                    deregistered = await disconnectGarminUser({
+                      userRef: userId, accessToken,
                     });
-
-                    console.log(
-                        `✅ Cleared Garmin data from user for batch ${batchRef.id}`,
-                    );
                   }
                 } catch (err) {
                   console.error(
@@ -4148,8 +4141,9 @@ exports.cleanupStaleBatches = onSchedule(
                 await batchRef.update({
                   status: "error",
                   processedActivities: 0,
-                  errorMessage:
-                  "No cycling or running activities found in your Garmin account",
+                  errorMessage: deregistered ?
+                    "No cycling or running activities found in your Garmin account" :
+                    GARMIN_RECONNECT_MESSAGE,
                   completedAt: admin.firestore.FieldValue.serverTimestamp(),
                 });
                 console.log(`✅ Marked batch ${batchRef.id} as error`);

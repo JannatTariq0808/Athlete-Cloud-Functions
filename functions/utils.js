@@ -1087,20 +1087,31 @@ const getValidAccessToken = async (userDoc, clientId, clientSecret, {force = fal
 
   console.log(`Refreshing Garmin access token for user ${userDoc.id}`);
 
-  const tokenRes = await axios.post(
-      "https://diauth.garmin.com/di-oauth2-service/oauth/token",
-      new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-      }),
-      {
-        auth: {
-          username: clientId,
-          password: clientSecret,
+  let tokenRes;
+  try {
+    tokenRes = await axios.post(
+        "https://diauth.garmin.com/di-oauth2-service/oauth/token",
+        new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+        }),
+        {
+          auth: {
+            username: clientId,
+            password: clientSecret,
+          },
+          headers: {"Content-Type": "application/x-www-form-urlencoded"},
         },
-        headers: {"Content-Type": "application/x-www-form-urlencoded"},
-      },
-  );
+    );
+  } catch (err) {
+    const status = err.response?.status;
+    const body = err.response?.data;
+    console.error(`Garmin token refresh failed for user ${userDoc.id}:`, status, body || err.message);
+    throw new Error(
+        `Garmin token refresh failed${status ? ` (${status})` : ""}: ` +
+        (body ? JSON.stringify(body) : err.message),
+    );
+  }
 
   const {access_token, refresh_token, expires_in} = tokenRes.data;
   const newExpiry = admin.firestore.Timestamp.fromDate(
@@ -1117,6 +1128,49 @@ const getValidAccessToken = async (userDoc, clientId, clientSecret, {force = fal
   console.log("Garmin access token refreshed, new expiry:", newExpiry.toDate());
 
   return access_token;
+};
+
+// Shown to the user when we can no longer act on their Garmin account with
+// the tokens we hold, so we cannot deregister them ourselves.
+const GARMIN_RECONNECT_MESSAGE =
+  "We couldn't access your Garmin account. Please remove Athlete Life under " +
+  "Connected Apps in your Garmin Connect app, then connect Garmin again.";
+
+// Best-effort deregistration. Returns true only when Garmin accepted it.
+const deregisterFromGarmin = async (accessToken) => {
+  if (!accessToken) return false;
+  try {
+    await axios.delete(
+        "https://apis.garmin.com/wellness-api/rest/user/registration",
+        {headers: {Authorization: `Bearer ${accessToken}`}},
+    );
+    return true;
+  } catch (err) {
+    console.warn(
+        "Failed to deregister from Garmin:",
+        err.response?.status,
+        err.response?.data || err.message,
+    );
+    return false;
+  }
+};
+
+// Tries to deregister the user from Garmin and clears the Garmin fields on the
+// user document either way, so the app shows them as disconnected and a new
+// connection starts clean. Returns whether Garmin accepted the deregistration.
+const disconnectGarminUser = async ({userRef, accessToken}) => {
+  const deregistered = await deregisterFromGarmin(accessToken);
+  await userRef.update({
+    access_token: admin.firestore.FieldValue.delete(),
+    refresh_token: admin.firestore.FieldValue.delete(),
+    token_expiry: admin.firestore.FieldValue.delete(),
+    garminUserId: admin.firestore.FieldValue.delete(),
+  });
+  console.log(
+      `Cleared Garmin data from user ${userRef.id}` +
+      (deregistered ? " (deregistered from Garmin)" : " (Garmin deregistration not possible)"),
+  );
+  return deregistered;
 };
 
 const deleteAllGarminBatchesForUser = async ({userRef, garminUserId}) => {
@@ -1290,6 +1344,9 @@ module.exports = {
   isQuarterFirstMonthDeadline,
   parseFitFile,
   getValidAccessToken,
+  GARMIN_RECONNECT_MESSAGE,
+  deregisterFromGarmin,
+  disconnectGarminUser,
   deleteAllGarminBatchesForUser,
   scheduleGarminRegistrationCheck,
 };
