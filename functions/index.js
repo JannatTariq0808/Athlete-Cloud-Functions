@@ -10,17 +10,17 @@
 // const {onCall} = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const axios = require("axios");
-const { FieldValue, FieldPath } = require("firebase-admin/firestore");
+const {FieldValue, FieldPath} = require("firebase-admin/firestore");
 
 if (!admin.apps.length) {
   admin.initializeApp({});
 }
 
-const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onRequest } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
+const {onSchedule} = require("firebase-functions/v2/scheduler");
+const {onRequest} = require("firebase-functions/v2/https");
+const {defineSecret} = require("firebase-functions/params");
 
-const { Timestamp } = require("firebase-admin/firestore");
+const {Timestamp} = require("firebase-admin/firestore");
 const {
   onDocumentCreated,
   onDocumentUpdated,
@@ -71,189 +71,189 @@ const {
 
 // publishScheduledArticlesDaily: Publish articles scheduled for the current day
 exports.publishScheduledArticlesDaily = onSchedule(
-  {
-    schedule: "0 0 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (event) => {
-    const db = admin.firestore();
+    {
+      schedule: "0 0 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (event) => {
+      const db = admin.firestore();
 
-    // Get today's date in UTC
-    const now = new Date();
-    const year = now.getUTCFullYear();
-    const month = now.getUTCMonth();
-    const day = now.getUTCDate();
+      // Get today's date in UTC
+      const now = new Date();
+      const year = now.getUTCFullYear();
+      const month = now.getUTCMonth();
+      const day = now.getUTCDate();
 
-    const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
-    const endOfDay = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0));
+      const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+      const endOfDay = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0));
 
-    try {
+      try {
       // Query scheduled articles for today
-      const articlesRef = db.collection("articles");
-      const snapshot = await articlesRef
-        .where("status", "==", "Scheduled")
-        .where("published_at", ">=", startOfDay)
-        .where("published_at", "<", endOfDay)
-        .get();
+        const articlesRef = db.collection("articles");
+        const snapshot = await articlesRef
+            .where("status", "==", "Scheduled")
+            .where("published_at", ">=", startOfDay)
+            .where("published_at", "<", endOfDay)
+            .get();
 
-      const batch = db.batch();
+        const batch = db.batch();
 
-      snapshot.forEach((doc) => {
-        batch.update(doc.ref, { status: "Published" });
-      });
+        snapshot.forEach((doc) => {
+          batch.update(doc.ref, {status: "Published"});
+        });
 
-      if (!snapshot.empty) {
-        await batch.commit();
+        if (!snapshot.empty) {
+          await batch.commit();
 
-        // Send push notification
-        const message = {
-          topic: "article_updates",
-          notification: {
-            title: "New Articles Published!",
-            body: `Check out ${snapshot.size} new article(s): ${snapshot.docs
-              .map((doc) => doc.data().title)
-              .join(", ")}`,
-          },
-          data: {
-            initialPageName: "Article",
-          },
-          android: {
+          // Send push notification
+          const message = {
+            topic: "article_updates",
             notification: {
-              sound: "default", // Android sound
+              title: "New Articles Published!",
+              body: `Check out ${snapshot.size} new article(s): ${snapshot.docs
+                  .map((doc) => doc.data().title)
+                  .join(", ")}`,
             },
-          },
-          apns: {
-            payload: {
-              aps: {
-                alert: {
-                  title: "New Articles Published!",
-                  body: `Check out ${snapshot.size} new article(s).`,
-                },
-                sound: "default",
+            data: {
+              initialPageName: "Article",
+            },
+            android: {
+              notification: {
+                sound: "default", // Android sound
               },
             },
-          },
-        };
+            apns: {
+              payload: {
+                aps: {
+                  alert: {
+                    title: "New Articles Published!",
+                    body: `Check out ${snapshot.size} new article(s).`,
+                  },
+                  sound: "default",
+                },
+              },
+            },
+          };
 
-        await createAppNotifications(
-          "New Articles Published!",
-          `Check out ${snapshot.size} new article(s): ${snapshot.docs
-            .map((doc) => doc.data().title)
-            .join(", ")}`,
-          "article_updates",
-          [],
-        );
+          await createAppNotifications(
+              "New Articles Published!",
+              `Check out ${snapshot.size} new article(s): ${snapshot.docs
+                  .map((doc) => doc.data().title)
+                  .join(", ")}`,
+              "article_updates",
+              [],
+          );
 
-        await admin.messaging().send(message);
+          await admin.messaging().send(message);
+        }
+
+        console.log(`Published ${snapshot.size} scheduled articles`);
+        return null;
+      } catch (error) {
+        console.error("Error in publishScheduledArticlesDaily:", error);
+        throw error; // Let Cloud Functions handle the error
       }
-
-      console.log(`Published ${snapshot.size} scheduled articles`);
-      return null;
-    } catch (error) {
-      console.error("Error in publishScheduledArticlesDaily:", error);
-      throw error; // Let Cloud Functions handle the error
-    }
-  },
+    },
 );
 
 // send push notification from API call
 exports.sendPushNotificationForArticle = onRequest(
-  {
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-  },
-  async (req, res) => {
+    {
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "512MiB",
+    },
+    async (req, res) => {
     // Handle pre-flight CORS
-    if (req.method === "OPTIONS") return res.sendStatus(204);
-    if (req.method !== "POST") {
-      return res.status(405).send("Method Not Allowed.");
-    }
-
-    try {
-      // --- 🔑 Auth Check ---
-      const authHeader = req.headers.authorization || "";
-      const idToken = authHeader.startsWith("Bearer ")
-        ? authHeader.split("Bearer ")[1]
-        : null;
-
-      if (!idToken) {
-        return res.status(401).json({
-          success: false,
-          error: "Unauthorized",
-          details: "Bearer token required.",
-        });
+      if (req.method === "OPTIONS") return res.sendStatus(204);
+      if (req.method !== "POST") {
+        return res.status(405).send("Method Not Allowed.");
       }
 
-      await admin.auth().verifyIdToken(idToken);
+      try {
+      // --- 🔑 Auth Check ---
+        const authHeader = req.headers.authorization || "";
+        const idToken = authHeader.startsWith("Bearer ") ?
+        authHeader.split("Bearer ")[1] :
+        null;
 
-      const { article_title = "" } = req.body;
+        if (!idToken) {
+          return res.status(401).json({
+            success: false,
+            error: "Unauthorized",
+            details: "Bearer token required.",
+          });
+        }
 
-      const message = {
-        notification: {
-          title: "New Article Published!",
-          body: `Check out 1 new article(s): ${article_title}`,
-        },
-        topic: "article_updates",
-        data: {
-          initialPageName: "Article", // FlutterFlow handler expects this
-          parameterData: JSON.stringify({}), // Optional, but future-proof
-        },
-      };
+        await admin.auth().verifyIdToken(idToken);
 
-      await createAppNotifications(
-        "New Article Published!",
-        `Check out 1 new article(s): ${article_title}`,
-        "article_updates",
-        [],
-      );
+        const {article_title = ""} = req.body;
 
-      await admin.messaging().send(message);
+        const message = {
+          notification: {
+            title: "New Article Published!",
+            body: `Check out 1 new article(s): ${article_title}`,
+          },
+          topic: "article_updates",
+          data: {
+            initialPageName: "Article", // FlutterFlow handler expects this
+            parameterData: JSON.stringify({}), // Optional, but future-proof
+          },
+        };
 
-      return res.status(200).json({ success: true });
-    } catch (error) {
-      console.error("Push notification error:", error);
-      const status = error.code?.startsWith("auth/") ? 403 : 500;
+        await createAppNotifications(
+            "New Article Published!",
+            `Check out 1 new article(s): ${article_title}`,
+            "article_updates",
+            [],
+        );
 
-      return res.status(status).json({
-        success: false,
-        error: error.message || "Internal server error.",
-      });
-    }
-  },
+        await admin.messaging().send(message);
+
+        return res.status(200).json({success: true});
+      } catch (error) {
+        console.error("Push notification error:", error);
+        const status = error.code?.startsWith("auth/") ? 403 : 500;
+
+        return res.status(status).json({
+          success: false,
+          error: error.message || "Internal server error.",
+        });
+      }
+    },
 );
 
 // 60 days notification
 exports.notify60DaysUntilAssessment = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    secrets: [BREVO_API_KEY],
-  },
-  async (event) => {
-    try {
-      const { nextAssessment, topic } = getNextAssessmentInfo();
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      secrets: [BREVO_API_KEY],
+    },
+    async (event) => {
+      try {
+        const {nextAssessment, topic} = getNextAssessmentInfo();
 
-      if (!shouldSendNotification(nextAssessment, 60)) {
-        return null;
-      }
+        if (!shouldSendNotification(nextAssessment, 60)) {
+          return null;
+        }
 
-      await createAppNotifications(
-        "60 days until next assessment window",
-        `The next assessment window is in 60 days. Our next knowledge topic is ${topic}. Remember the answers are in the articles.`,
-        "assessment_updates",
-        [],
-      );
+        await createAppNotifications(
+            "60 days until next assessment window",
+            `The next assessment window is in 60 days. Our next knowledge topic is ${topic}. Remember the answers are in the articles.`,
+            "assessment_updates",
+            [],
+        );
 
-      await sendEmail(
-        BREVO_API_KEY.value(),
-        "Prepare Now: Next Athlete Assessment in 60 Days!",
-        `
+        await sendEmail(
+            BREVO_API_KEY.value(),
+            "Prepare Now: Next Athlete Assessment in 60 Days!",
+            `
           <html>
             <body>
               <p>Hi {user.name},</p>
@@ -265,175 +265,175 @@ exports.notify60DaysUntilAssessment = onSchedule(
             </body>
           </html>
         `,
-        topic,
-        null,
-      );
+            topic,
+            null,
+        );
 
-      await sendPush(
-        "60 days until next assessment window",
-        `The next assessment window is in 60 days. Our next knowledge topic is ${topic}. Remember the answers are in the articles.`,
-        "assessment_updates",
-      );
+        await sendPush(
+            "60 days until next assessment window",
+            `The next assessment window is in 60 days. Our next knowledge topic is ${topic}. Remember the answers are in the articles.`,
+            "assessment_updates",
+        );
 
-      return null;
-    } catch (error) {
-      console.error("Error in notify60DaysUntilAssessment:", error);
-      throw error;
-    }
-  },
+        return null;
+      } catch (error) {
+        console.error("Error in notify60DaysUntilAssessment:", error);
+        throw error;
+      }
+    },
 );
 
 // 30 days notification
 exports.notify30DaysUntilAssessment = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (event) => {
-    try {
-      const { nextAssessment } = getNextAssessmentInfo();
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (event) => {
+      try {
+        const {nextAssessment} = getNextAssessmentInfo();
 
-      if (!shouldSendNotification(nextAssessment, 30)) {
+        if (!shouldSendNotification(nextAssessment, 30)) {
+          return null;
+        }
+
+        await createAppNotifications(
+            "30 days until next assessment window",
+            "30-day countdown to the next assessment window!",
+            "assessment_updates",
+            [],
+        );
+
+        await sendPush(
+            "30 days until next assessment window",
+            "30-day countdown to the next assessment window!",
+            "assessment_updates",
+        );
+
         return null;
+      } catch (error) {
+        console.error("Error in notify30DaysUntilAssessment:", error);
+        throw error;
       }
-
-      await createAppNotifications(
-        "30 days until next assessment window",
-        "30-day countdown to the next assessment window!",
-        "assessment_updates",
-        [],
-      );
-
-      await sendPush(
-        "30 days until next assessment window",
-        "30-day countdown to the next assessment window!",
-        "assessment_updates",
-      );
-
-      return null;
-    } catch (error) {
-      console.error("Error in notify30DaysUntilAssessment:", error);
-      throw error;
-    }
-  },
+    },
 );
 
 // 14 days notification
 exports.notify14DaysUntilAssessment = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (event) => {
-    try {
-      const { nextAssessment } = getNextAssessmentInfo();
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (event) => {
+      try {
+        const {nextAssessment} = getNextAssessmentInfo();
 
-      if (!shouldSendNotification(nextAssessment, 14)) {
+        if (!shouldSendNotification(nextAssessment, 14)) {
+          return null;
+        }
+
+        await createAppNotifications(
+            "14 days before next assessment",
+            `14 days until your next assessment window`,
+            "assessment_updates",
+            [],
+        );
+
+        await sendPush(
+            "14 days before next assessment",
+            "14 days until your next assessment window",
+        );
+
         return null;
+      } catch (error) {
+        console.error("Error in notify14DaysUntilAssessment:", error);
+        throw error;
       }
-
-      await createAppNotifications(
-        "14 days before next assessment",
-        `14 days until your next assessment window`,
-        "assessment_updates",
-        [],
-      );
-
-      await sendPush(
-        "14 days before next assessment",
-        "14 days until your next assessment window",
-      );
-
-      return null;
-    } catch (error) {
-      console.error("Error in notify14DaysUntilAssessment:", error);
-      throw error;
-    }
-  },
+    },
 );
 
 // 7 days notification
 exports.notify7DaysUntilAssessment = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (event) => {
-    try {
-      const { nextAssessment } = getNextAssessmentInfo();
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (event) => {
+      try {
+        const {nextAssessment} = getNextAssessmentInfo();
 
-      if (!shouldSendNotification(nextAssessment, 7)) {
+        if (!shouldSendNotification(nextAssessment, 7)) {
+          return null;
+        }
+
+        await createAppNotifications(
+            "7 days until next assessment window",
+            "One-week alert! Get ready for your upcoming assessment",
+            "assessment_updates",
+            [],
+        );
+
+        await sendPush(
+            "7 days until next assessment window",
+            "One-week alert! Get ready for your upcoming assessment.",
+            "assessment_updates",
+        );
+
         return null;
+      } catch (error) {
+        console.error("Error in notify7DaysUntilAssessment:", error);
+        throw error;
       }
-
-      await createAppNotifications(
-        "7 days until next assessment window",
-        "One-week alert! Get ready for your upcoming assessment",
-        "assessment_updates",
-        [],
-      );
-
-      await sendPush(
-        "7 days until next assessment window",
-        "One-week alert! Get ready for your upcoming assessment.",
-        "assessment_updates",
-      );
-
-      return null;
-    } catch (error) {
-      console.error("Error in notify7DaysUntilAssessment:", error);
-      throw error;
-    }
-  },
+    },
 );
 
 // Assessment window opens notification
 exports.notifyAssessmentWindowOpens = onSchedule(
-  {
-    schedule: "30 0 1 * *", // Runs at midnight UTC on the 1st of every month
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    secrets: [BREVO_API_KEY],
-  },
-  async (event) => {
-    try {
-      const now = new Date();
-      const currentMonth = now.getUTCMonth() + 1; // 1-12, UTC
+    {
+      schedule: "30 0 1 * *", // Runs at midnight UTC on the 1st of every month
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      secrets: [BREVO_API_KEY],
+    },
+    async (event) => {
+      try {
+        const now = new Date();
+        const currentMonth = now.getUTCMonth() + 1; // 1-12, UTC
 
-      // Define quarter start months
-      const quarterStartMonths = [1, 4, 7, 10];
+        // Define quarter start months
+        const quarterStartMonths = [1, 4, 7, 10];
 
-      // Check if current month is a quarter start month
-      if (!quarterStartMonths.includes(currentMonth)) {
-        console.log(`Month ${currentMonth} is not a quarter start month`);
-        return null;
-      }
+        // Check if current month is a quarter start month
+        if (!quarterStartMonths.includes(currentMonth)) {
+          console.log(`Month ${currentMonth} is not a quarter start month`);
+          return null;
+        }
 
-      // Find current quarter based on start month
-      const currentQuarter = getCurrentQuarter();
+        // Find current quarter based on start month
+        const currentQuarter = getCurrentQuarter();
 
-      if (!currentQuarter) {
-        return null;
-      }
+        if (!currentQuarter) {
+          return null;
+        }
 
-      await createAppNotifications(
-        "Assessent window starts",
-        "The assessmnent window is open - good luck",
-        "assessment_updates",
-        [],
-      );
+        await createAppNotifications(
+            "Assessent window starts",
+            "The assessmnent window is open - good luck",
+            "assessment_updates",
+            [],
+        );
 
-      await sendEmail(
-        BREVO_API_KEY.value(),
-        "Athlete Assessment Window Now Open - Good Luck!",
-        `
+        await sendEmail(
+            BREVO_API_KEY.value(),
+            "Athlete Assessment Window Now Open - Good Luck!",
+            `
           <html>
             <body>
               <p>Hi {user.name},</p>
@@ -445,868 +445,868 @@ exports.notifyAssessmentWindowOpens = onSchedule(
             </body>
           </html>
         `,
-        "",
-        null,
-      );
+            "",
+            null,
+        );
 
-      await sendPush(
-        "Assessment window starts",
-        "The assessment window is open - good luck",
-        "assessment_updates",
-      );
+        await sendPush(
+            "Assessment window starts",
+            "The assessment window is open - good luck",
+            "assessment_updates",
+        );
 
-      return null;
-    } catch (error) {
-      console.error("Error in notifyAssessmentWindowOpens:", error);
-      throw error;
-    }
-  },
+        return null;
+      } catch (error) {
+        console.error("Error in notifyAssessmentWindowOpens:", error);
+        throw error;
+      }
+    },
 );
 
 exports.getUsersWithCurrentLevels = onRequest(
-  {
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (req, res) => {
-    if (req.method === "OPTIONS") return res.status(204).send("");
+    {
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (req, res) => {
+      if (req.method === "OPTIONS") return res.status(204).send("");
 
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", message: "Bearer token required." });
-    }
-    const idToken = authHeader.split("Bearer ")[1];
-
-    try {
-      await admin.auth().verifyIdToken(idToken);
-      const db = admin.firestore();
-
-      const pageSize = parseInt(req.query.pageSize, 10) || 10;
-      const pageToken = req.query.pageToken || null;
-      const pageNumber = req.query.pageNumber
-        ? parseInt(req.query.pageNumber, 10)
-        : null;
-      const direction = req.query.direction || "next";
-      const category = (req.query.category || "").trim();
-      const searchField = (req.query.searchField || "").trim().toLowerCase();
-
-      // 1️⃣ Fetch all users first (filtered by role/type)
-      const allSnap = await db
-        .collection("users")
-        .where("role", "==", "User")
-        .get();
-      // 1️⃣ Fetch all users first (filtered by role/type)
-      let usersArray = allSnap.docs.map((doc) => ({
-        id: doc.id,
-        ref: doc.ref,
-        ...doc.data(),
-      }));
-
-      // Apply category filter if provided
-      if (category) {
-        usersArray = usersArray.filter(
-          (u) => (u.type || "").toLowerCase() === category.toLowerCase(),
-        );
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res
+            .status(401)
+            .json({error: "Unauthorized", message: "Bearer token required."});
       }
+      const idToken = authHeader.split("Bearer ")[1];
 
-      // Apply search filter if provided
-      if (searchField) {
-        usersArray = usersArray.filter(
-          (u) =>
-            (u.display_name || "").toLowerCase().includes(searchField) ||
+      try {
+        await admin.auth().verifyIdToken(idToken);
+        const db = admin.firestore();
+
+        const pageSize = parseInt(req.query.pageSize, 10) || 10;
+        const pageToken = req.query.pageToken || null;
+        const pageNumber = req.query.pageNumber ?
+        parseInt(req.query.pageNumber, 10) :
+        null;
+        const direction = req.query.direction || "next";
+        const category = (req.query.category || "").trim();
+        const searchField = (req.query.searchField || "").trim().toLowerCase();
+
+        // 1️⃣ Fetch all users first (filtered by role/type)
+        const allSnap = await db
+            .collection("users")
+            .where("role", "==", "User")
+            .get();
+        // 1️⃣ Fetch all users first (filtered by role/type)
+        let usersArray = allSnap.docs.map((doc) => ({
+          id: doc.id,
+          ref: doc.ref,
+          ...doc.data(),
+        }));
+
+        // Apply category filter if provided
+        if (category) {
+          usersArray = usersArray.filter(
+              (u) => (u.type || "").toLowerCase() === category.toLowerCase(),
+          );
+        }
+
+        // Apply search filter if provided
+        if (searchField) {
+          usersArray = usersArray.filter(
+              (u) =>
+                (u.display_name || "").toLowerCase().includes(searchField) ||
             (u.email || "").toLowerCase().includes(searchField),
-        );
-      }
+          );
+        }
 
-      // 2️⃣ Paginate users
-      const paged = paginate(usersArray, {
-        pageSize,
-        pageToken,
-        pageNumber,
-        direction,
-        tokenKeyExtractor: (item) => item.id,
-      });
+        // 2️⃣ Paginate users
+        const paged = paginate(usersArray, {
+          pageSize,
+          pageToken,
+          pageNumber,
+          direction,
+          tokenKeyExtractor: (item) => item.id,
+        });
 
-      // 3️⃣ Resolve current assessment for each user
-      const currentYear = new Date().getUTCFullYear();
-      const currentQuarter = getCurrentQuarter();
-      // const {prevQuarter, prevYear} = getPreviousQuarter(
-      //     currentQuarter,
-      //     currentYear,
-      // );
+        // 3️⃣ Resolve current assessment for each user
+        const currentYear = new Date().getUTCFullYear();
+        const currentQuarter = getCurrentQuarter();
+        // const {prevQuarter, prevYear} = getPreviousQuarter(
+        //     currentQuarter,
+        //     currentYear,
+        // );
 
-      const users = await Promise.all(
-        paged.data.map(async (user) => {
-          let assessmentData = null;
-          let assessmentDoc = null;
+        const users = await Promise.all(
+            paged.data.map(async (user) => {
+              let assessmentData = null;
+              let assessmentDoc = null;
 
-          try {
-            // 1️⃣ Current quarter assessment
-            const assessmentSnap = await db
-              .collection("assessments")
-              .where("user_id", "==", user.ref)
-              .where("year", "==", currentYear)
-              .where("quarter.month", "==", currentQuarter.month)
-              .limit(1)
-              .get();
+              try {
+                // 1️⃣ Current quarter assessment
+                const assessmentSnap = await db
+                    .collection("assessments")
+                    .where("user_id", "==", user.ref)
+                    .where("year", "==", currentYear)
+                    .where("quarter.month", "==", currentQuarter.month)
+                    .limit(1)
+                    .get();
 
-            if (!assessmentSnap.empty) {
-              assessmentDoc = assessmentSnap.docs[0];
-            } else {
-              console.log("- No assessment found for current quarter");
-            }
+                if (!assessmentSnap.empty) {
+                  assessmentDoc = assessmentSnap.docs[0];
+                } else {
+                  console.log("- No assessment found for current quarter");
+                }
 
-            // 2️⃣ Fallback to previous quarter if incomplete
-            if (!assessmentDoc || assessmentDoc.data().is_completed !== true) {
-              const prevSnap = await db
-                .collection("assessments")
-                .where("user_id", "==", user.ref)
-                .where("is_completed", "==", true)
-                .orderBy("created_at", "desc")
-                .limit(1)
-                .get();
-              if (!prevSnap.empty) {
-                assessmentDoc = prevSnap.docs[0];
-                console.log(`Fallback assessment found: ${assessmentDoc.id}`);
-              } else {
-                console.log(
-                  "No fallback assessment found for previous quarter.",
-                );
-              }
-            }
+                // 2️⃣ Fallback to previous quarter if incomplete
+                if (!assessmentDoc || assessmentDoc.data().is_completed !== true) {
+                  const prevSnap = await db
+                      .collection("assessments")
+                      .where("user_id", "==", user.ref)
+                      .where("is_completed", "==", true)
+                      .orderBy("created_at", "desc")
+                      .limit(1)
+                      .get();
+                  if (!prevSnap.empty) {
+                    assessmentDoc = prevSnap.docs[0];
+                    console.log(`Fallback assessment found: ${assessmentDoc.id}`);
+                  } else {
+                    console.log(
+                        "No fallback assessment found for previous quarter.",
+                    );
+                  }
+                }
 
-            // 3️⃣ Resolve sub-assessments (cardio/strength/knowledge)
-            if (assessmentDoc) {
-              const assessment = assessmentDoc.data();
-              const isValidRef = (ref) => ref && typeof ref.get === "function";
+                // 3️⃣ Resolve sub-assessments (cardio/strength/knowledge)
+                if (assessmentDoc) {
+                  const assessment = assessmentDoc.data();
+                  const isValidRef = (ref) => ref && typeof ref.get === "function";
 
-              console.log(
-                `- Fetching sub-assessments: cardio_id: ${assessment.cardio_id?.id}, strength_id: ${assessment.strength_id?.id}, knowledge_id: ${assessment.knowledge_id?.id}`,
-              );
+                  console.log(
+                      `- Fetching sub-assessments: cardio_id: ${assessment.cardio_id?.id}, strength_id: ${assessment.strength_id?.id}, knowledge_id: ${assessment.knowledge_id?.id}`,
+                  );
 
-              const [cardioSnap, strengthSnap, knowledgeSnap] =
+                  const [cardioSnap, strengthSnap, knowledgeSnap] =
                 await Promise.all([
-                  isValidRef(assessment.cardio_id)
-                    ? assessment.cardio_id.get()
-                    : null,
-                  isValidRef(assessment.strength_id)
-                    ? assessment.strength_id.get()
-                    : null,
-                  isValidRef(assessment.knowledge_id)
-                    ? assessment.knowledge_id.get()
-                    : null,
+                  isValidRef(assessment.cardio_id) ?
+                    assessment.cardio_id.get() :
+                    null,
+                  isValidRef(assessment.strength_id) ?
+                    assessment.strength_id.get() :
+                    null,
+                  isValidRef(assessment.knowledge_id) ?
+                    assessment.knowledge_id.get() :
+                    null,
                 ]);
 
-              assessmentData = {
-                cardio_level: cardioSnap?.exists
-                  ? cardioSnap.data().level
-                  : null,
-                strength_level: strengthSnap?.exists
-                  ? strengthSnap.data().level
-                  : null,
-                knowledge_level: knowledgeSnap?.exists
-                  ? knowledgeSnap.data().level
-                  : null,
-              };
-            } else {
-              console.log("- No assessment data resolved for this user");
-            }
+                  assessmentData = {
+                    cardio_level: cardioSnap?.exists ?
+                  cardioSnap.data().level :
+                  null,
+                    strength_level: strengthSnap?.exists ?
+                  strengthSnap.data().level :
+                  null,
+                    knowledge_level: knowledgeSnap?.exists ?
+                  knowledgeSnap.data().level :
+                  null,
+                  };
+                } else {
+                  console.log("- No assessment data resolved for this user");
+                }
 
-            return {
-              user_id: user.id,
-              name: user.display_name || null,
-              email: user.email || null,
-              photo_url: user.photo_url || null,
-              athlete_level: user.athlete_level ?? null,
-              current_assessment: assessmentData,
-              created_time:
+                return {
+                  user_id: user.id,
+                  name: user.display_name || null,
+                  email: user.email || null,
+                  photo_url: user.photo_url || null,
+                  athlete_level: user.athlete_level ?? null,
+                  current_assessment: assessmentData,
+                  created_time:
                 user.created_time?.toDate?.().toISOString?.() ||
                 user.created_at?.toDate?.().toISOString?.(),
-              is_banned: user.is_banned ?? false,
-              type: user.type || null,
-            };
-          } catch (err) {
-            console.error(
-              `❌ Error processing user ${user.display_name}:`,
-              err,
-            );
-            return null;
-          }
-        }),
-      );
+                  is_banned: user.is_banned ?? false,
+                  type: user.type || null,
+                };
+              } catch (err) {
+                console.error(
+                    `❌ Error processing user ${user.display_name}:`,
+                    err,
+                );
+                return null;
+              }
+            }),
+        );
 
-      return res.status(200).json({
-        users,
-        nextPageToken: paged.nextPageToken,
-        prevPageToken: paged.prevPageToken,
-        totalCount: paged.totalCount,
-        totalPages: paged.totalPages,
-        currentPage: paged.currentPage,
-      });
-    } catch (err) {
-      return res.status(500).json({ error: err.message, details: err });
-    }
-  },
+        return res.status(200).json({
+          users,
+          nextPageToken: paged.nextPageToken,
+          prevPageToken: paged.prevPageToken,
+          totalCount: paged.totalCount,
+          totalPages: paged.totalPages,
+          currentPage: paged.currentPage,
+        });
+      } catch (err) {
+        return res.status(500).json({error: err.message, details: err});
+      }
+    },
 );
 
 // ✅ getAssessmentStatistics
 exports.getAssessmentStatistics = onRequest(
-  { cors: true, region: "europe-west2", timeoutSeconds: 540, memory: "1GiB" },
-  async (req, res) => {
-    if (req.method === "OPTIONS") return res.status(204).send("");
+    {cors: true, region: "europe-west2", timeoutSeconds: 540, memory: "1GiB"},
+    async (req, res) => {
+      if (req.method === "OPTIONS") return res.status(204).send("");
 
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", message: "Bearer token required." });
-    }
-    const idToken = authHeader.split("Bearer ")[1];
-    try {
-      await admin.auth().verifyIdToken(idToken);
-      const db = admin.firestore();
-      const snapshot = await db.collection("assessments").get();
-      if (snapshot.empty) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
         return res
-          .status(200)
-          .json({ statistics: [], message: "No assessments found" });
+            .status(401)
+            .json({error: "Unauthorized", message: "Bearer token required."});
       }
+      const idToken = authHeader.split("Bearer ")[1];
+      try {
+        await admin.auth().verifyIdToken(idToken);
+        const db = admin.firestore();
+        const snapshot = await db.collection("assessments").get();
+        if (snapshot.empty) {
+          return res
+              .status(200)
+              .json({statistics: [], message: "No assessments found"});
+        }
 
-      const stats = {};
+        const stats = {};
 
-      snapshot.docs.forEach((doc) => {
-        const data = doc.data();
-        const { isOnboarding, is_completed, year, quarter } = data;
-        if (!year || typeof is_completed !== "boolean") return;
+        snapshot.docs.forEach((doc) => {
+          const data = doc.data();
+          const {isOnboarding, is_completed, year, quarter} = data;
+          if (!year || typeof is_completed !== "boolean") return;
 
-        // Month calculation
-        const month = isOnboarding
-          ? new Date(
+          // Month calculation
+          const month = isOnboarding ?
+          new Date(
               data.created_at?.toDate?.() || data.created_at,
-            ).getUTCMonth() + 1
-          : quarter?.month;
+          ).getUTCMonth() + 1 :
+          quarter?.month;
 
-        const key = isOnboarding
-          ? `${year}-${String(month).padStart(2, "0")}`
-          : `${year}-${quarter.label}`;
+          const key = isOnboarding ?
+          `${year}-${String(month).padStart(2, "0")}` :
+          `${year}-${quarter.label}`;
 
-        if (!stats[key]) {
-          stats[key] = {
-            id_ref: key,
-            assessment: isOnboarding
-              ? `Onboarding ${year}-${String(month).padStart(2, "0")}`
-              : `Assessment ${quarter.label}/${year}`,
-            year,
-            month: isOnboarding ? month : undefined,
-            assessmentStartDate: new Date(
-              Date.UTC(year, (month || 1) - 1, 1),
-            ).toISOString(),
-            quarter: quarter || null,
-            completed_count: 0,
-            not_completed_count: 0,
-            total_count: 0,
-            onboarding: !!isOnboarding,
-          };
-        }
+          if (!stats[key]) {
+            stats[key] = {
+              id_ref: key,
+              assessment: isOnboarding ?
+              `Onboarding ${year}-${String(month).padStart(2, "0")}` :
+              `Assessment ${quarter.label}/${year}`,
+              year,
+              month: isOnboarding ? month : undefined,
+              assessmentStartDate: new Date(
+                  Date.UTC(year, (month || 1) - 1, 1),
+              ).toISOString(),
+              quarter: quarter || null,
+              completed_count: 0,
+              not_completed_count: 0,
+              total_count: 0,
+              onboarding: !!isOnboarding,
+            };
+          }
 
-        // Only count if is_completed is boolean
-        if (typeof is_completed === "boolean") {
-          is_completed
-            ? stats[key].completed_count++
-            : stats[key].not_completed_count++;
+          // Only count if is_completed is boolean
+          if (typeof is_completed === "boolean") {
+          is_completed ?
+            stats[key].completed_count++ :
+            stats[key].not_completed_count++;
           stats[key].total_count++;
-        }
-      });
+          }
+        });
 
-      const combined = Object.values(stats);
-      combined.sort((a, b) =>
+        const combined = Object.values(stats);
+        combined.sort((a, b) =>
         a.assessmentStartDate > b.assessmentStartDate ? -1 : 1,
-      );
+        );
 
-      const {
-        pageSize = 10,
-        pageToken = null,
-        pageNumber = null,
-        direction,
-      } = req.query;
-      const paged = paginate(combined, {
-        pageSize: Number(pageSize),
-        pageToken,
-        pageNumber: pageNumber ? Number(pageNumber) : null,
-        direction,
-        tokenKeyExtractor: (item) => item.id_ref,
-      });
-      const totalAll = combined.reduce((sum, a) => sum + a.total_count, 0);
-      console.log("Total across all grouped assessments:", totalAll);
+        const {
+          pageSize = 10,
+          pageToken = null,
+          pageNumber = null,
+          direction,
+        } = req.query;
+        const paged = paginate(combined, {
+          pageSize: Number(pageSize),
+          pageToken,
+          pageNumber: pageNumber ? Number(pageNumber) : null,
+          direction,
+          tokenKeyExtractor: (item) => item.id_ref,
+        });
+        const totalAll = combined.reduce((sum, a) => sum + a.total_count, 0);
+        console.log("Total across all grouped assessments:", totalAll);
 
-      return res.status(200).json(paged);
-    } catch (err) {
-      return res.status(500).json({ error: err.message, details: err });
-    }
-  },
+        return res.status(200).json(paged);
+      } catch (err) {
+        return res.status(500).json({error: err.message, details: err});
+      }
+    },
 );
 
 // ✅ getUsersAssessment
 exports.getUsersAssessment = onRequest(
-  { cors: true, region: "europe-west2", timeoutSeconds: 540, memory: "1GiB" },
-  async (req, res) => {
-    if (req.method === "OPTIONS") return res.status(204).send("");
+    {cors: true, region: "europe-west2", timeoutSeconds: 540, memory: "1GiB"},
+    async (req, res) => {
+      if (req.method === "OPTIONS") return res.status(204).send("");
 
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", message: "Bearer token required." });
-    }
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res
+            .status(401)
+            .json({error: "Unauthorized", message: "Bearer token required."});
+      }
 
-    const idToken = authHeader.split("Bearer ")[1];
-    try {
-      await admin.auth().verifyIdToken(idToken);
-      const db = admin.firestore();
+      const idToken = authHeader.split("Bearer ")[1];
+      try {
+        await admin.auth().verifyIdToken(idToken);
+        const db = admin.firestore();
 
-      const {
-        year,
-        month,
-        pageSize = 10,
-        pageToken = null,
-        pageNumber = null,
-        direction,
-        userType, // <-- 'Policy Holder' or 'Non Policy Holder'
-        searchField = "",
-      } = req.query;
+        const {
+          year,
+          month,
+          pageSize = 10,
+          pageToken = null,
+          pageNumber = null,
+          direction,
+          userType, // <-- 'Policy Holder' or 'Non Policy Holder'
+          searchField = "",
+        } = req.query;
 
-      const searchLower = (searchField || "").trim().toLowerCase();
+        const searchLower = (searchField || "").trim().toLowerCase();
 
-      if (!year) return res.status(400).json({ error: "Year is required." });
+        if (!year) return res.status(400).json({error: "Year is required."});
 
-      const assessmentsSnapshot = await db.collection("assessments").get();
-      const filteredAssessments = [];
+        const assessmentsSnapshot = await db.collection("assessments").get();
+        const filteredAssessments = [];
 
-      assessmentsSnapshot.docs.forEach((doc) => {
-        const data = doc.data();
-        const { isOnboarding, year: docYear, quarter, is_completed } = data;
-        if (!docYear || typeof is_completed !== "boolean") return;
+        assessmentsSnapshot.docs.forEach((doc) => {
+          const data = doc.data();
+          const {isOnboarding, year: docYear, quarter, is_completed} = data;
+          if (!docYear || typeof is_completed !== "boolean") return;
 
-        const createdDate = data.created_at?.toDate
-          ? data.created_at.toDate()
-          : new Date(data.created_at);
-        if (isNaN(createdDate)) return;
+          const createdDate = data.created_at?.toDate ?
+          data.created_at.toDate() :
+          new Date(data.created_at);
+          if (isNaN(createdDate)) return;
 
-        const createdMonth = createdDate.getUTCMonth() + 1; // 1-12
-        const effectiveMonth = isOnboarding ? createdMonth : quarter?.month;
+          const createdMonth = createdDate.getUTCMonth() + 1; // 1-12
+          const effectiveMonth = isOnboarding ? createdMonth : quarter?.month;
 
-        if (docYear === parseInt(year) && effectiveMonth === Number(month)) {
-          filteredAssessments.push({
-            ...data,
-            month: effectiveMonth,
-            assessment_start_date: new Date(
-              Date.UTC(docYear, (effectiveMonth || 1) - 1, 1),
-            ).toISOString(),
-          });
+          if (docYear === parseInt(year) && effectiveMonth === Number(month)) {
+            filteredAssessments.push({
+              ...data,
+              month: effectiveMonth,
+              assessment_start_date: new Date(
+                  Date.UTC(docYear, (effectiveMonth || 1) - 1, 1),
+              ).toISOString(),
+            });
+          }
+        });
+
+        // Compute counts
+        const currentCompletedCount = filteredAssessments.filter(
+            (a) => a.is_completed,
+        ).length;
+        const currentNotCompletedCount = filteredAssessments.filter(
+            (a) => !a.is_completed,
+        ).length;
+
+        // Process assessments in chunks
+        const users = [];
+        const assessmentChunks = chunkArray(filteredAssessments, 10);
+
+        for (const chunk of assessmentChunks) {
+          for (const assessment of chunk) {
+            const userRef = assessment.user_id;
+            if (!userRef || typeof userRef.get !== "function") continue;
+
+            const userSnap = await userRef.get();
+            if (!userSnap.exists) continue;
+
+            const user = userSnap.data();
+            // --- SEARCH FILTER ---
+            if (searchLower) {
+              const name = (user.display_name || "").toLowerCase();
+              const email = (user.email || "").toLowerCase();
+              if (!name.includes(searchLower) && !email.includes(searchLower)) {
+                continue;
+              }
+            }
+
+            // --- FILTER USERS BY TYPE ---
+            let userTypeFilter = userType;
+            if (userTypeFilter === "Policy Holder") {
+              userTypeFilter = "policy_holder";
+            } // convert
+
+            if (userTypeFilter && user.type !== userTypeFilter) continue;
+            console.log(
+                "User:",
+                user.email,
+                "Type:",
+                user.type,
+                "userTypeFilter:",
+                userTypeFilter,
+            );
+
+            if (userTypeFilter === "policy_holder") {
+              if (!user.email) continue;
+
+              const normalizedEmail = user.email.toLowerCase();
+
+              const policiesSnap = await db
+                  .collection("policies")
+                  .where("user_email", "==", normalizedEmail)
+                  .where("status", "==", "Active") // make sure this matches exactly
+                  .limit(1)
+                  .get();
+
+              if (policiesSnap.empty) continue;
+              console.log(
+                  "User:",
+                  user.email,
+                  "| Type:",
+                  user.type,
+                  "| userTypeFilter:",
+                  userTypeFilter,
+                  "| Has active policy:",
+                  !policiesSnap.empty,
+              );
+            }
+
+            const assessmentCreatedAt = assessment.created_at?.toDate ?
+            assessment.created_at.toDate() :
+            new Date(assessment.created_at);
+
+            // Fetch previous completed assessment
+            const prevSnap = await db
+                .collection("assessments")
+                .where("user_id", "==", userRef)
+                .where("is_completed", "==", true)
+                .where("created_at", "<", Timestamp.fromDate(assessmentCreatedAt))
+                .orderBy("created_at", "desc")
+                .limit(1)
+                .get();
+
+            const previousLevel = !prevSnap.empty ?
+            prevSnap.docs[0].data().level :
+            null;
+
+            users.push({
+              id_ref: userSnap.id,
+              user_id: userSnap.id,
+              name: user.display_name || null,
+              email: user.email || null,
+              profile_url: user.photo_url || null,
+              athlete_level: assessment.level || null,
+              previous_level: previousLevel,
+              current_assessment: assessment,
+            });
+          }
         }
-      });
 
-      // Compute counts
-      const currentCompletedCount = filteredAssessments.filter(
-        (a) => a.is_completed,
-      ).length;
-      const currentNotCompletedCount = filteredAssessments.filter(
-        (a) => !a.is_completed,
-      ).length;
+        const paged = paginate(users, {
+          pageSize: Number(pageSize),
+          pageToken,
+          pageNumber: pageNumber ? Number(pageNumber) : null,
+          direction,
+          tokenKeyExtractor: (item) => item.id_ref,
+        });
 
-      // Process assessments in chunks
-      const users = [];
-      const assessmentChunks = chunkArray(filteredAssessments, 10);
+        return res.status(200).json({
+          ...paged,
+          current_completed_count: currentCompletedCount,
+          not_completed_count: currentNotCompletedCount,
+          total_assessments: currentCompletedCount + currentNotCompletedCount,
+          assessment_start_date:
+          filteredAssessments[0]?.assessment_start_date || null,
+        });
+      } catch (error) {
+        return res.status(500).json({error: error.message, details: error});
+      }
+    },
+);
 
-      for (const chunk of assessmentChunks) {
-        for (const assessment of chunk) {
-          const userRef = assessment.user_id;
+exports.createQuarterlyAssessments = onSchedule(
+    {
+      schedule: "0 0 1 * *", // Runs at midnight UTC on the 1st of every month
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      timeZone: "Etc/UTC", // Explicitly set to UTC (GMT)
+    },
+    async (event) => {
+      try {
+        const db = admin.firestore();
+        const now = new Date();
+        const currentMonth = now.getUTCMonth() + 1; // 1-12, UTC
+        const currentYear = now.getUTCFullYear(); // UTC
+
+        // Define quarter start months
+        const quarterStartMonths = [1, 4, 7, 10];
+
+        // Check if current month is a quarter start month
+        if (!quarterStartMonths.includes(currentMonth)) {
+          console.log(`Month ${currentMonth} is not a quarter start month`);
+          return null;
+        }
+
+        // Find current quarter based on start month
+        const currentQuarter = getCurrentQuarter();
+
+        if (!currentQuarter) {
+          console.log(`No quarter found for month ${currentMonth}`);
+          return null;
+        }
+
+        // Get all assessments who onboarding is completed
+        const assessmentSnapshot = await db
+            .collection("assessments")
+            .where("isOnboarding", "==", true)
+            .get();
+
+        if (assessmentSnapshot.empty) {
+          console.log("No users found with role 'User'");
+          return null;
+        }
+
+        // Create a batch for Firestore operations
+        const batch = db.batch();
+
+        // Process each user
+        assessmentSnapshot.forEach((assessmentDoc) => {
+          const data = assessmentDoc.data();
+          const userRef = data.user_id;
+
+          if (!userRef) {
+            console.warn(
+                `Skipping assessment ${assessmentDoc.id} - missing user_id`,
+            );
+            return;
+          }
+
+          const assessmentRef = db.collection("assessments").doc();
+          batch.set(assessmentRef, {
+            user_id: userRef,
+            created_at: FieldValue.serverTimestamp(),
+            year: currentYear,
+            quarter: {
+              label: currentQuarter.label,
+              month: currentQuarter.month,
+              type: currentQuarter.type,
+            },
+            is_completed: false,
+            isOnboarding: false,
+          });
+        });
+
+        // Commit the batch
+        await batch.commit();
+        console.log(
+            `Created ${assessmentSnapshot.size} assessment documents for ${currentQuarter.label}/${currentYear}`,
+        );
+
+        return null;
+      } catch (error) {
+        console.error("Error in createQuarterlyAssessments:", error);
+        throw error; // Let Cloud Functions handle the error
+      }
+    },
+);
+
+// This function runs at the end of each month and updates the level field of incomplete assessments for quarter months
+exports.updateIncompleteAssessments = onSchedule(
+    {
+      schedule: "55 23 28-31 * *", // Runs at 23:55 UTC on days 28-31 of each month
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      timeZone: "Etc/UTC",
+    },
+    async (event) => {
+      const db = admin.firestore();
+      const now = new Date();
+      const currentMonth = now.getUTCMonth() + 1; // 1-12
+      const currentDay = now.getUTCDate();
+      const currentYear = now.getUTCFullYear();
+
+      // Only run on quarter months
+      const quarterMonths = [3, 6, 9, 12];
+      if (!quarterMonths.includes(currentMonth)) return null;
+
+      // Check if today is the last day of the month
+      const tomorrow = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+      );
+      if (tomorrow.getUTCDate() !== 1) {
+        console.log(
+            `Today (${currentDay}) is not the last day of the month. Exiting.`,
+        );
+        return null;
+      }
+
+      try {
+        const assessmentsSnapshot = await db
+            .collection("assessments")
+            .where("quarter.month", "==", currentMonth)
+            .where("year", "==", currentYear)
+            .where("is_completed", "==", false)
+            .get();
+
+        if (assessmentsSnapshot.empty) {
+          console.log("No incomplete assessments found for this quarter month.");
+          return null;
+        }
+
+        const batch = db.batch();
+        const processedUsers = new Set(); // Track processed users
+
+        const notifications = []; // only userId + message
+
+        for (const doc of assessmentsSnapshot.docs) {
+          const data = doc.data();
+          const userRef = data.user_id;
           if (!userRef || typeof userRef.get !== "function") continue;
 
           const userSnap = await userRef.get();
           if (!userSnap.exists) continue;
 
-          const user = userSnap.data();
-          // --- SEARCH FILTER ---
-          if (searchLower) {
-            const name = (user.display_name || "").toLowerCase();
-            const email = (user.email || "").toLowerCase();
-            if (!name.includes(searchLower) && !email.includes(searchLower)) {
-              continue;
-            }
+          const userData = userSnap.data();
+          const userId = userSnap.id;
+
+          if (processedUsers.has(userId)) continue;
+          processedUsers.add(userId);
+
+          // Update missed + athlete_level
+          let missed = userData.consecutive_missed_assessments || 0;
+          missed += 1;
+          let athleteLevel = userData.athlete_level || null;
+
+          if (missed >= 3 && athleteLevel && athleteLevel > 1) {
+            athleteLevel -= 1;
+            missed = 0; // reset after penalty
           }
 
-          // --- FILTER USERS BY TYPE ---
-          let userTypeFilter = userType;
-          if (userTypeFilter === "Policy Holder") {
-            userTypeFilter = "policy_holder";
-          } // convert
-
-          if (userTypeFilter && user.type !== userTypeFilter) continue;
-          console.log(
-            "User:",
-            user.email,
-            "Type:",
-            user.type,
-            "userTypeFilter:",
-            userTypeFilter,
-          );
-
-          if (userTypeFilter === "policy_holder") {
-            if (!user.email) continue;
-
-            const normalizedEmail = user.email.toLowerCase();
-
-            const policiesSnap = await db
-              .collection("policies")
-              .where("user_email", "==", normalizedEmail)
-              .where("status", "==", "Active") // make sure this matches exactly
-              .limit(1)
-              .get();
-
-            if (policiesSnap.empty) continue;
-            console.log(
-              "User:",
-              user.email,
-              "| Type:",
-              user.type,
-              "| userTypeFilter:",
-              userTypeFilter,
-              "| Has active policy:",
-              !policiesSnap.empty,
-            );
+          // Personalized message
+          let notificationMsg = "";
+          if (missed === 1) {
+            notificationMsg = `Your Athlete level remains at ${
+              athleteLevel || 1
+            }. You can skip one more assessment before your level may decrease.`;
+          } else if (missed === 2) {
+            notificationMsg = `Your Athlete level remains at ${
+              athleteLevel || 1
+            }. Missing the next assessment will reduce your level by 1.`;
+          } else if (missed >= 3) {
+            notificationMsg = `Your Athlete level has been reduced to ${
+              athleteLevel || 1
+            }. Find out why in this article.`;
           }
 
-          const assessmentCreatedAt = assessment.created_at?.toDate
-            ? assessment.created_at.toDate()
-            : new Date(assessment.created_at);
+          if (userData.assessment_updates && notificationMsg) {
+            notifications.push({userId, message: notificationMsg});
+          }
 
-          // Fetch previous completed assessment
-          const prevSnap = await db
-            .collection("assessments")
-            .where("user_id", "==", userRef)
-            .where("is_completed", "==", true)
-            .where("created_at", "<", Timestamp.fromDate(assessmentCreatedAt))
-            .orderBy("created_at", "desc")
-            .limit(1)
-            .get();
-
-          const previousLevel = !prevSnap.empty
-            ? prevSnap.docs[0].data().level
-            : null;
-
-          users.push({
-            id_ref: userSnap.id,
-            user_id: userSnap.id,
-            name: user.display_name || null,
-            email: user.email || null,
-            profile_url: user.photo_url || null,
-            athlete_level: assessment.level || null,
-            previous_level: previousLevel,
-            current_assessment: assessment,
+          // Update user record
+          batch.update(userRef, {
+            consecutive_missed_assessments: missed,
+            athlete_level: athleteLevel,
           });
+
+          // Update assessment with level at close
+          batch.update(doc.ref, {level: athleteLevel});
         }
-      }
 
-      const paged = paginate(users, {
-        pageSize: Number(pageSize),
-        pageToken,
-        pageNumber: pageNumber ? Number(pageNumber) : null,
-        direction,
-        tokenKeyExtractor: (item) => item.id_ref,
-      });
+        await batch.commit();
 
-      return res.status(200).json({
-        ...paged,
-        current_completed_count: currentCompletedCount,
-        not_completed_count: currentNotCompletedCount,
-        total_assessments: currentCompletedCount + currentNotCompletedCount,
-        assessment_start_date:
-          filteredAssessments[0]?.assessment_start_date || null,
-      });
-    } catch (error) {
-      return res.status(500).json({ error: error.message, details: error });
-    }
-  },
-);
+        // Send notifications
+        if (notifications.length > 0) {
+          const notificationTitle = "Assessment window closed!";
+          const type = "assessment_updates";
 
-exports.createQuarterlyAssessments = onSchedule(
-  {
-    schedule: "0 0 1 * *", // Runs at midnight UTC on the 1st of every month
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    timeZone: "Etc/UTC", // Explicitly set to UTC (GMT)
-  },
-  async (event) => {
-    try {
-      const db = admin.firestore();
-      const now = new Date();
-      const currentMonth = now.getUTCMonth() + 1; // 1-12, UTC
-      const currentYear = now.getUTCFullYear(); // UTC
-
-      // Define quarter start months
-      const quarterStartMonths = [1, 4, 7, 10];
-
-      // Check if current month is a quarter start month
-      if (!quarterStartMonths.includes(currentMonth)) {
-        console.log(`Month ${currentMonth} is not a quarter start month`);
-        return null;
-      }
-
-      // Find current quarter based on start month
-      const currentQuarter = getCurrentQuarter();
-
-      if (!currentQuarter) {
-        console.log(`No quarter found for month ${currentMonth}`);
-        return null;
-      }
-
-      // Get all assessments who onboarding is completed
-      const assessmentSnapshot = await db
-        .collection("assessments")
-        .where("isOnboarding", "==", true)
-        .get();
-
-      if (assessmentSnapshot.empty) {
-        console.log("No users found with role 'User'");
-        return null;
-      }
-
-      // Create a batch for Firestore operations
-      const batch = db.batch();
-
-      // Process each user
-      assessmentSnapshot.forEach((assessmentDoc) => {
-        const data = assessmentDoc.data();
-        const userRef = data.user_id;
-
-        if (!userRef) {
-          console.warn(
-            `Skipping assessment ${assessmentDoc.id} - missing user_id`,
+          await createAppNotifications(
+              notificationTitle,
+              null,
+              type,
+              notifications,
           );
-          return;
+
+          await sendPush(
+              notificationTitle,
+              null,
+              "assessment_updates",
+              {},
+              null,
+              notifications.map((n) => ({
+                userId: n.userId,
+                title: notificationTitle,
+                body: n.message,
+              })),
+          );
         }
 
-        const assessmentRef = db.collection("assessments").doc();
-        batch.set(assessmentRef, {
-          user_id: userRef,
-          created_at: FieldValue.serverTimestamp(),
-          year: currentYear,
-          quarter: {
-            label: currentQuarter.label,
-            month: currentQuarter.month,
-            type: currentQuarter.type,
-          },
-          is_completed: false,
-          isOnboarding: false,
-        });
-      });
-
-      // Commit the batch
-      await batch.commit();
-      console.log(
-        `Created ${assessmentSnapshot.size} assessment documents for ${currentQuarter.label}/${currentYear}`,
-      );
-
-      return null;
-    } catch (error) {
-      console.error("Error in createQuarterlyAssessments:", error);
-      throw error; // Let Cloud Functions handle the error
-    }
-  },
-);
-
-// This function runs at the end of each month and updates the level field of incomplete assessments for quarter months
-exports.updateIncompleteAssessments = onSchedule(
-  {
-    schedule: "55 23 28-31 * *", // Runs at 23:55 UTC on days 28-31 of each month
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    timeZone: "Etc/UTC",
-  },
-  async (event) => {
-    const db = admin.firestore();
-    const now = new Date();
-    const currentMonth = now.getUTCMonth() + 1; // 1-12
-    const currentDay = now.getUTCDate();
-    const currentYear = now.getUTCFullYear();
-
-    // Only run on quarter months
-    const quarterMonths = [3, 6, 9, 12];
-    if (!quarterMonths.includes(currentMonth)) return null;
-
-    // Check if today is the last day of the month
-    const tomorrow = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
-    );
-    if (tomorrow.getUTCDate() !== 1) {
-      console.log(
-        `Today (${currentDay}) is not the last day of the month. Exiting.`,
-      );
-      return null;
-    }
-
-    try {
-      const assessmentsSnapshot = await db
-        .collection("assessments")
-        .where("quarter.month", "==", currentMonth)
-        .where("year", "==", currentYear)
-        .where("is_completed", "==", false)
-        .get();
-
-      if (assessmentsSnapshot.empty) {
-        console.log("No incomplete assessments found for this quarter month.");
         return null;
+      } catch (error) {
+        console.error("Error in updateIncompleteAssessments:", error);
+        throw error;
       }
-
-      const batch = db.batch();
-      const processedUsers = new Set(); // Track processed users
-
-      const notifications = []; // only userId + message
-
-      for (const doc of assessmentsSnapshot.docs) {
-        const data = doc.data();
-        const userRef = data.user_id;
-        if (!userRef || typeof userRef.get !== "function") continue;
-
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) continue;
-
-        const userData = userSnap.data();
-        const userId = userSnap.id;
-
-        if (processedUsers.has(userId)) continue;
-        processedUsers.add(userId);
-
-        // Update missed + athlete_level
-        let missed = userData.consecutive_missed_assessments || 0;
-        missed += 1;
-        let athleteLevel = userData.athlete_level || null;
-
-        if (missed >= 3 && athleteLevel && athleteLevel > 1) {
-          athleteLevel -= 1;
-          missed = 0; // reset after penalty
-        }
-
-        // Personalized message
-        let notificationMsg = "";
-        if (missed === 1) {
-          notificationMsg = `Your Athlete level remains at ${
-            athleteLevel || 1
-          }. You can skip one more assessment before your level may decrease.`;
-        } else if (missed === 2) {
-          notificationMsg = `Your Athlete level remains at ${
-            athleteLevel || 1
-          }. Missing the next assessment will reduce your level by 1.`;
-        } else if (missed >= 3) {
-          notificationMsg = `Your Athlete level has been reduced to ${
-            athleteLevel || 1
-          }. Find out why in this article.`;
-        }
-
-        if (userData.assessment_updates && notificationMsg) {
-          notifications.push({ userId, message: notificationMsg });
-        }
-
-        // Update user record
-        batch.update(userRef, {
-          consecutive_missed_assessments: missed,
-          athlete_level: athleteLevel,
-        });
-
-        // Update assessment with level at close
-        batch.update(doc.ref, { level: athleteLevel });
-      }
-
-      await batch.commit();
-
-      // Send notifications
-      if (notifications.length > 0) {
-        const notificationTitle = "Assessment window closed!";
-        const type = "assessment_updates";
-
-        await createAppNotifications(
-          notificationTitle,
-          null,
-          type,
-          notifications,
-        );
-
-        await sendPush(
-          notificationTitle,
-          null,
-          "assessment_updates",
-          {},
-          null,
-          notifications.map((n) => ({
-            userId: n.userId,
-            title: notificationTitle,
-            body: n.message,
-          })),
-        );
-      }
-
-      return null;
-    } catch (error) {
-      console.error("Error in updateIncompleteAssessments:", error);
-      throw error;
-    }
-  },
+    },
 );
 
 // 15 days until assessment window closes (if not completed)
 exports.notify15DaysUntilAssessmentCloses = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    secrets: ["BREVO_API_KEY"],
-  },
-  async (event) => {
-    const now = new Date();
-    const currentYear = now.getUTCFullYear();
-    const currentMonth = now.getUTCMonth() + 1;
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      secrets: ["BREVO_API_KEY"],
+    },
+    async (event) => {
+      const now = new Date();
+      const currentYear = now.getUTCFullYear();
+      const currentMonth = now.getUTCMonth() + 1;
 
-    const currentQuarter = getCurrentQuarter();
-    if (!currentQuarter) return null;
+      const currentQuarter = getCurrentQuarter();
+      if (!currentQuarter) return null;
 
-    const assessmentCloseDate = new Date(
-      Date.UTC(currentYear, currentMonth, 0, 23, 59, 59),
-    );
-    const today = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    );
-    const diffDays = Math.floor(
-      (assessmentCloseDate - today) / (1000 * 60 * 60 * 24),
-    );
-    if (diffDays !== 15) return null;
+      const assessmentCloseDate = new Date(
+          Date.UTC(currentYear, currentMonth, 0, 23, 59, 59),
+      );
+      const today = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
+      const diffDays = Math.floor(
+          (assessmentCloseDate - today) / (1000 * 60 * 60 * 24),
+      );
+      if (diffDays !== 15) return null;
 
-    try {
-      const db = admin.firestore();
+      try {
+        const db = admin.firestore();
 
-      // 1️⃣ Fetch all incomplete assessments for current quarter
-      const assessmentsSnapshot = await db
-        .collection("assessments")
-        .where("quarter.month", "==", currentQuarter.month)
-        .where("year", "==", currentYear)
-        .where("is_completed", "==", false)
-        .get();
+        // 1️⃣ Fetch all incomplete assessments for current quarter
+        const assessmentsSnapshot = await db
+            .collection("assessments")
+            .where("quarter.month", "==", currentQuarter.month)
+            .where("year", "==", currentYear)
+            .where("is_completed", "==", false)
+            .get();
 
-      if (assessmentsSnapshot.empty) return null;
+        if (assessmentsSnapshot.empty) return null;
 
-      const processedUsers = new Set();
-      const targetedUsersOnboarding = []; // onboarding users → old notification
-      const userRecords = []; // non-onboarding users with { userId, email, display_name }
+        const processedUsers = new Set();
+        const targetedUsersOnboarding = []; // onboarding users → old notification
+        const userRecords = []; // non-onboarding users with { userId, email, display_name }
 
-      for (const doc of assessmentsSnapshot.docs) {
-        const data = doc.data();
-        const userRef = data.user_id;
-        if (!userRef || typeof userRef.get !== "function") continue;
+        for (const doc of assessmentsSnapshot.docs) {
+          const data = doc.data();
+          const userRef = data.user_id;
+          if (!userRef || typeof userRef.get !== "function") continue;
 
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) continue;
+          const userSnap = await userRef.get();
+          if (!userSnap.exists) continue;
 
-        const userId = userSnap.id;
-        const userData = userSnap.data() || {};
-        const userEmail = userData.email;
+          const userId = userSnap.id;
+          const userData = userSnap.data() || {};
+          const userEmail = userData.email;
 
-        if (processedUsers.has(userId) || !userData.assessment_updates) {
-          continue;
+          if (processedUsers.has(userId) || !userData.assessment_updates) {
+            continue;
+          }
+          processedUsers.add(userId);
+
+          if (data.isOnboarding === true) {
+            targetedUsersOnboarding.push(userId);
+          } else if (userEmail) {
+            userRecords.push({
+              userId,
+              email: userEmail,
+              display_name: userData.display_name,
+            });
+          }
         }
-        processedUsers.add(userId);
 
-        if (data.isOnboarding === true) {
-          targetedUsersOnboarding.push(userId);
-        } else if (userEmail) {
-          userRecords.push({
-            userId,
-            email: userEmail,
-            display_name: userData.display_name,
-          });
-        }
-      }
-
-      // 2️⃣ Send push notifications to onboarding users
-      if (targetedUsersOnboarding.length > 0) {
-        const title = "15 days until assessment window closes";
-        const body =
+        // 2️⃣ Send push notifications to onboarding users
+        if (targetedUsersOnboarding.length > 0) {
+          const title = "15 days until assessment window closes";
+          const body =
           "Only 15 days left to complete your assessment. Don't miss out!";
 
-        await createAppNotifications(
-          title,
-          body,
-          "assessment_updates",
-          targetedUsersOnboarding.map((userId) => ({ userId, message: body })),
-        );
-
-        await sendPush(
-          title,
-          body,
-          "assessment_updates",
-          {},
-          targetedUsersOnboarding,
-        );
-      }
-
-      if (userRecords.length === 0) return null;
-
-      // 3️⃣ Policies check for non-onboarding users
-      const year = now.getUTCFullYear();
-      const month = now.getUTCMonth();
-      const day = now.getUTCDate();
-      const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
-      const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
-
-      const emailChunks = [];
-      const allEmails = userRecords.map((u) => u.email);
-      for (let i = 0; i < allEmails.length; i += 10) {
-        emailChunks.push(allEmails.slice(i, i + 10));
-      }
-
-      const policies = [];
-      for (const chunk of emailChunks) {
-        const snap = await db
-          .collection("policies")
-          .where("status", "==", "Active")
-          .where("user_email", "in", chunk)
-          .where("starting_date", "<=", endOfDay)
-          .where("ending_date", ">=", startOfDay)
-          .get();
-        policies.push(...snap.docs.map((d) => d.data()));
-      }
-
-      if (policies.length === 0) return null;
-
-      // 4️⃣ Merge user info with policy info
-      const updatedUsers = userRecords
-        .map((user) => {
-          const policy = policies.find(
-            (p) => p.user_email === user.email && p.pendingAmount > 0,
+          await createAppNotifications(
+              title,
+              body,
+              "assessment_updates",
+              targetedUsersOnboarding.map((userId) => ({userId, message: body})),
           );
-          if (!policy) return null;
-          return {
-            ...user,
-            locked_amount: policy.pendingAmount,
-          };
-        })
-        .filter(Boolean);
 
-      if (updatedUsers.length === 0) return null;
+          await sendPush(
+              title,
+              body,
+              "assessment_updates",
+              {},
+              targetedUsersOnboarding,
+          );
+        }
 
-      // 5️⃣ Send emails individually (personalized)
-      for (const { email, display_name, locked_amount } of updatedUsers) {
-        const roundedAmount = Number(locked_amount).toFixed(2);
-        await sendEmail(
-          BREVO_API_KEY.value(), // ✅ secret manager
-          `15 days left to bank £${roundedAmount}`,
-          `
+        if (userRecords.length === 0) return null;
+
+        // 3️⃣ Policies check for non-onboarding users
+        const year = now.getUTCFullYear();
+        const month = now.getUTCMonth();
+        const day = now.getUTCDate();
+        const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+        const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
+
+        const emailChunks = [];
+        const allEmails = userRecords.map((u) => u.email);
+        for (let i = 0; i < allEmails.length; i += 10) {
+          emailChunks.push(allEmails.slice(i, i + 10));
+        }
+
+        const policies = [];
+        for (const chunk of emailChunks) {
+          const snap = await db
+              .collection("policies")
+              .where("status", "==", "Active")
+              .where("user_email", "in", chunk)
+              .where("starting_date", "<=", endOfDay)
+              .where("ending_date", ">=", startOfDay)
+              .get();
+          policies.push(...snap.docs.map((d) => d.data()));
+        }
+
+        if (policies.length === 0) return null;
+
+        // 4️⃣ Merge user info with policy info
+        const updatedUsers = userRecords
+            .map((user) => {
+              const policy = policies.find(
+                  (p) => p.user_email === user.email && p.pendingAmount > 0,
+              );
+              if (!policy) return null;
+              return {
+                ...user,
+                locked_amount: policy.pendingAmount,
+              };
+            })
+            .filter(Boolean);
+
+        if (updatedUsers.length === 0) return null;
+
+        // 5️⃣ Send emails individually (personalized)
+        for (const {email, display_name, locked_amount} of updatedUsers) {
+          const roundedAmount = Number(locked_amount).toFixed(2);
+          await sendEmail(
+              BREVO_API_KEY.value(), // ✅ secret manager
+              `15 days left to bank £${roundedAmount}`,
+              `
             <html>
               <body>
                 <p>Hi ${display_name},</p>
@@ -1316,173 +1316,173 @@ exports.notify15DaysUntilAssessmentCloses = onSchedule(
               </body>
             </html>
           `,
-          "",
-          [{ email }],
-        );
+              "",
+              [{email}],
+          );
+        }
+
+        // 6️⃣ Build notifications + push
+        const perUserMessages = [];
+        const notificationTitle = `15 days until assessment window closes`;
+
+        for (const {userId, locked_amount} of updatedUsers) {
+          if (!locked_amount || locked_amount <= 0) continue;
+          const roundedAmount = Number(locked_amount).toFixed(2);
+
+          const body = `⏳ 15 days left to bank £${roundedAmount}. Don't lose it - book your assessment.`;
+
+          perUserMessages.push({userId, title: notificationTitle, body});
+        }
+
+        if (perUserMessages.length > 0) {
+          await createAppNotifications(
+              notificationTitle,
+              null,
+              "assessment_updates",
+              perUserMessages.map(({userId, body}) => ({
+                userId,
+                message: body,
+              })),
+          );
+
+          await sendPush({perUserMessages});
+        }
+
+        return null;
+      } catch (error) {
+        console.error("Error notifying users:", error);
+        return null;
       }
-
-      // 6️⃣ Build notifications + push
-      const perUserMessages = [];
-      const notificationTitle = `15 days until assessment window closes`;
-
-      for (const { userId, locked_amount } of updatedUsers) {
-        if (!locked_amount || locked_amount <= 0) continue;
-        const roundedAmount = Number(locked_amount).toFixed(2);
-
-        const body = `⏳ 15 days left to bank £${roundedAmount}. Don't lose it - book your assessment.`;
-
-        perUserMessages.push({ userId, title: notificationTitle, body });
-      }
-
-      if (perUserMessages.length > 0) {
-        await createAppNotifications(
-          notificationTitle,
-          null,
-          "assessment_updates",
-          perUserMessages.map(({ userId, body }) => ({
-            userId,
-            message: body,
-          })),
-        );
-
-        await sendPush({ perUserMessages });
-      }
-
-      return null;
-    } catch (error) {
-      console.error("Error notifying users:", error);
-      return null;
-    }
-  },
+    },
 );
 
 // 7 days until assessment window closes (if not completed)
 exports.notify7DaysUntilAssessmentCloses = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    secrets: ["BREVO_API_KEY"],
-  },
-  async (event) => {
-    const now = new Date();
-    const currentYear = now.getUTCFullYear();
-    const currentMonth = now.getUTCMonth() + 1;
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      secrets: ["BREVO_API_KEY"],
+    },
+    async (event) => {
+      const now = new Date();
+      const currentYear = now.getUTCFullYear();
+      const currentMonth = now.getUTCMonth() + 1;
 
-    // Find the current quarter
-    const currentQuarter = getCurrentQuarter();
-    if (!currentQuarter) return null;
+      // Find the current quarter
+      const currentQuarter = getCurrentQuarter();
+      if (!currentQuarter) return null;
 
-    // Assessment window closes at the end of this month
-    const assessmentCloseDate = new Date(
-      Date.UTC(currentYear, currentMonth, 0, 23, 59, 59),
-    );
-    const today = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    );
+      // Assessment window closes at the end of this month
+      const assessmentCloseDate = new Date(
+          Date.UTC(currentYear, currentMonth, 0, 23, 59, 59),
+      );
+      const today = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
 
-    const diffDays = Math.floor(
-      (assessmentCloseDate - today) / (1000 * 60 * 60 * 24),
-    );
-    if (diffDays !== 7) return null; // Only run 7 days before month end
+      const diffDays = Math.floor(
+          (assessmentCloseDate - today) / (1000 * 60 * 60 * 24),
+      );
+      if (diffDays !== 7) return null; // Only run 7 days before month end
 
-    try {
-      const db = admin.firestore();
-      const BREVO_API_KEY_VALUE = BREVO_API_KEY.value();
+      try {
+        const db = admin.firestore();
+        const BREVO_API_KEY_VALUE = BREVO_API_KEY.value();
 
-      // 1️⃣ Fetch incomplete assessments
-      const assessmentsSnapshot = await db
-        .collection("assessments")
-        .where("quarter.month", "==", currentQuarter.month)
-        .where("year", "==", currentYear)
-        .where("is_completed", "==", false)
-        .where("isOnboarding", "==", false)
-        .get();
+        // 1️⃣ Fetch incomplete assessments
+        const assessmentsSnapshot = await db
+            .collection("assessments")
+            .where("quarter.month", "==", currentQuarter.month)
+            .where("year", "==", currentYear)
+            .where("is_completed", "==", false)
+            .where("isOnboarding", "==", false)
+            .get();
 
-      if (assessmentsSnapshot.empty) return null;
+        if (assessmentsSnapshot.empty) return null;
 
-      const processedUsers = new Set();
-      const userFetches = assessmentsSnapshot.docs.map(async (doc) => {
-        const data = doc.data();
-        const userRef = data.user_id;
-        if (!userRef || typeof userRef.get !== "function") return null;
+        const processedUsers = new Set();
+        const userFetches = assessmentsSnapshot.docs.map(async (doc) => {
+          const data = doc.data();
+          const userRef = data.user_id;
+          if (!userRef || typeof userRef.get !== "function") return null;
 
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) return null;
+          const userSnap = await userRef.get();
+          if (!userSnap.exists) return null;
 
-        const userId = userSnap.id;
-        if (processedUsers.has(userId)) return null;
-        processedUsers.add(userId);
+          const userId = userSnap.id;
+          if (processedUsers.has(userId)) return null;
+          processedUsers.add(userId);
 
-        const userData = userSnap.data() || {};
-        if (!userData.email || !userData.assessment_updates) return null;
-
-        return {
-          userId,
-          email: userData.email,
-          name: userData.display_name,
-        };
-      });
-
-      const userRecords = (await Promise.all(userFetches)).filter(Boolean);
-      if (!userRecords.length) return null;
-
-      // 2️⃣ Policies lookup
-      const year = now.getUTCFullYear();
-      const month = now.getUTCMonth();
-      const day = now.getUTCDate();
-
-      const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
-      const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
-
-      // Split into chunks of 10 emails for Firestore `in` query
-      const emailChunks = [];
-      const allEmails = userRecords.map((u) => u.email);
-      for (let i = 0; i < allEmails.length; i += 10) {
-        emailChunks.push(allEmails.slice(i, i + 10));
-      }
-
-      const policies = [];
-      for (const chunk of emailChunks) {
-        const snap = await db
-          .collection("policies")
-          .where("status", "==", "Active")
-          .where("user_email", "in", chunk)
-          .where("starting_date", "<=", endOfDay)
-          .where("ending_date", ">=", startOfDay)
-          .get();
-
-        policies.push(...snap.docs.map((d) => d.data()));
-      }
-
-      if (!policies.length) return null;
-
-      // 3️⃣ Build updated users with locked_amount
-      const updatedUsers = userRecords
-        .map((user) => {
-          // find the corresponding policy for this user's email
-          const policy = policies.find(
-            (p) => p.user_email === user.email && p.pendingAmount > 0,
-          );
-          if (!policy) return null;
+          const userData = userSnap.data() || {};
+          if (!userData.email || !userData.assessment_updates) return null;
 
           return {
-            ...user,
-            locked_amount: policy.pendingAmount || 0, // from policies table
+            userId,
+            email: userData.email,
+            name: userData.display_name,
           };
-        })
-        .filter(Boolean);
+        });
 
-      if (!updatedUsers.length) return null;
+        const userRecords = (await Promise.all(userFetches)).filter(Boolean);
+        if (!userRecords.length) return null;
 
-      // 4️⃣ Send email to each user
-      for (const { email, display_name, locked_amount } of updatedUsers) {
-        const roundedAmount = Number(locked_amount).toFixed(2);
-        await sendEmail(
-          BREVO_API_KEY_VALUE,
-          `Don't lose your £${roundedAmount} rebate`,
-          `
+        // 2️⃣ Policies lookup
+        const year = now.getUTCFullYear();
+        const month = now.getUTCMonth();
+        const day = now.getUTCDate();
+
+        const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+        const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
+
+        // Split into chunks of 10 emails for Firestore `in` query
+        const emailChunks = [];
+        const allEmails = userRecords.map((u) => u.email);
+        for (let i = 0; i < allEmails.length; i += 10) {
+          emailChunks.push(allEmails.slice(i, i + 10));
+        }
+
+        const policies = [];
+        for (const chunk of emailChunks) {
+          const snap = await db
+              .collection("policies")
+              .where("status", "==", "Active")
+              .where("user_email", "in", chunk)
+              .where("starting_date", "<=", endOfDay)
+              .where("ending_date", ">=", startOfDay)
+              .get();
+
+          policies.push(...snap.docs.map((d) => d.data()));
+        }
+
+        if (!policies.length) return null;
+
+        // 3️⃣ Build updated users with locked_amount
+        const updatedUsers = userRecords
+            .map((user) => {
+              // find the corresponding policy for this user's email
+              const policy = policies.find(
+                  (p) => p.user_email === user.email && p.pendingAmount > 0,
+              );
+              if (!policy) return null;
+
+              return {
+                ...user,
+                locked_amount: policy.pendingAmount || 0, // from policies table
+              };
+            })
+            .filter(Boolean);
+
+        if (!updatedUsers.length) return null;
+
+        // 4️⃣ Send email to each user
+        for (const {email, display_name, locked_amount} of updatedUsers) {
+          const roundedAmount = Number(locked_amount).toFixed(2);
+          await sendEmail(
+              BREVO_API_KEY_VALUE,
+              `Don't lose your £${roundedAmount} rebate`,
+              `
             <html>
               <body>
                 <p>Hi ${display_name},</p>
@@ -1492,433 +1492,433 @@ exports.notify7DaysUntilAssessmentCloses = onSchedule(
               </body>
             </html>
           `,
-          "",
-          [{ email }],
-        );
+              "",
+              [{email}],
+          );
+        }
+
+        // 5️⃣ Build push notifications
+        const notificationTitle = "7 days until assessment window closes";
+        const perUserMessages = updatedUsers.map((u) => {
+          const roundedAmount = Number(u.locked_amount).toFixed(2);
+          return {
+            userId: u.userId,
+            title: notificationTitle,
+            body: `Last chance! 7 days to bank £${roundedAmount}. Complete your assessment.`,
+          };
+        });
+
+        if (perUserMessages.length) {
+          await createAppNotifications(
+              notificationTitle,
+              null,
+              "assessment_updates",
+              perUserMessages.map(({userId, body}) => ({
+                userId,
+                message: body,
+              })),
+          );
+
+          await sendPush({perUserMessages}); // ✅ correct usage
+        }
+
+        return null;
+      } catch (err) {
+        console.error("notify7DaysUntilAssessmentCloses failed:", err);
+        return null;
       }
-
-      // 5️⃣ Build push notifications
-      const notificationTitle = "7 days until assessment window closes";
-      const perUserMessages = updatedUsers.map((u) => {
-        const roundedAmount = Number(u.locked_amount).toFixed(2);
-        return {
-          userId: u.userId,
-          title: notificationTitle,
-          body: `Last chance! 7 days to bank £${roundedAmount}. Complete your assessment.`,
-        };
-      });
-
-      if (perUserMessages.length) {
-        await createAppNotifications(
-          notificationTitle,
-          null,
-          "assessment_updates",
-          perUserMessages.map(({ userId, body }) => ({
-            userId,
-            message: body,
-          })),
-        );
-
-        await sendPush({ perUserMessages }); // ✅ correct usage
-      }
-
-      return null;
-    } catch (err) {
-      console.error("notify7DaysUntilAssessmentCloses failed:", err);
-      return null;
-    }
-  },
+    },
 );
 
 // 2 days until assessment window closes (if not completed)
 exports.notify2DaysUntilAssessmentCloses = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (event) => {
-    const now = new Date();
-    const currentYear = now.getUTCFullYear();
-    const currentMonth = now.getUTCMonth() + 1;
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (event) => {
+      const now = new Date();
+      const currentYear = now.getUTCFullYear();
+      const currentMonth = now.getUTCMonth() + 1;
 
-    // Find the current quarter
-    const currentQuarter = getCurrentQuarter();
+      // Find the current quarter
+      const currentQuarter = getCurrentQuarter();
 
-    if (!currentQuarter) return null;
+      if (!currentQuarter) return null;
 
-    // Assessment window closes at the end of this month
-    const assessmentCloseDate = new Date(
-      Date.UTC(currentYear, currentMonth, 0, 23, 59, 59),
-    );
-    const today = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    );
+      // Assessment window closes at the end of this month
+      const assessmentCloseDate = new Date(
+          Date.UTC(currentYear, currentMonth, 0, 23, 59, 59),
+      );
+      const today = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
 
-    // If today is 2 days before the end of the month
-    const diffDays = Math.floor(
-      (assessmentCloseDate - today) / (1000 * 60 * 60 * 24),
-    );
-    if (diffDays !== 2) return null;
+      // If today is 2 days before the end of the month
+      const diffDays = Math.floor(
+          (assessmentCloseDate - today) / (1000 * 60 * 60 * 24),
+      );
+      if (diffDays !== 2) return null;
 
-    try {
-      const db = admin.firestore();
+      try {
+        const db = admin.firestore();
 
-      // Get all incomplete assessments for this quarter
-      const assessmentsSnapshot = await db
-        .collection("assessments")
-        .where("quarter.month", "==", currentQuarter.month)
-        .where("year", "==", currentYear)
-        .where("is_completed", "==", false)
-        .get();
+        // Get all incomplete assessments for this quarter
+        const assessmentsSnapshot = await db
+            .collection("assessments")
+            .where("quarter.month", "==", currentQuarter.month)
+            .where("year", "==", currentYear)
+            .where("is_completed", "==", false)
+            .get();
 
-      if (assessmentsSnapshot.empty) return null;
+        if (assessmentsSnapshot.empty) return null;
 
-      const processedUsers = [];
+        const processedUsers = [];
 
-      const notificationMsg =
+        const notificationMsg =
         "Urgent reminder: Just 2 days remaining to finish your assessment!";
-      // Collect user IDs and send personalized notifications
-      for (const doc of assessmentsSnapshot.docs) {
-        const data = doc.data();
-        const userRef = data.user_id;
-        if (!userRef || typeof userRef.get !== "function") continue;
+        // Collect user IDs and send personalized notifications
+        for (const doc of assessmentsSnapshot.docs) {
+          const data = doc.data();
+          const userRef = data.user_id;
+          if (!userRef || typeof userRef.get !== "function") continue;
 
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) continue;
+          const userSnap = await userRef.get();
+          if (!userSnap.exists) continue;
 
-        const userId = userSnap.id;
-        const userData = userSnap.data() || {};
+          const userId = userSnap.id;
+          const userData = userSnap.data() || {};
 
-        // Skip if user already processed
-        if (processedUsers.includes(userId) || !userData.assessment_updates) {
-          continue;
+          // Skip if user already processed
+          if (processedUsers.includes(userId) || !userData.assessment_updates) {
+            continue;
+          }
+
+          processedUsers.push(userId);
         }
 
-        processedUsers.push(userId);
+        // Create a unique notification record for this user
+        if (processedUsers.length > 0) {
+          await createAppNotifications(
+              "2 days until assessment window closes",
+              null,
+              "assessment_updates",
+              processedUsers.map((id) => ({
+                userId: id,
+                message: notificationMsg,
+              })),
+          );
+
+          await sendPush(
+              "2 days until assessment window closes",
+              notificationMsg,
+              "assessment_updates",
+              {},
+              processedUsers,
+          );
+        }
+
+        return null;
+      } catch (err) {
+        console.error("notify2DaysUntilAssessmentCloses failed:", err);
       }
-
-      // Create a unique notification record for this user
-      if (processedUsers.length > 0) {
-        await createAppNotifications(
-          "2 days until assessment window closes",
-          null,
-          "assessment_updates",
-          processedUsers.map((id) => ({
-            userId: id,
-            message: notificationMsg,
-          })),
-        );
-
-        await sendPush(
-          "2 days until assessment window closes",
-          notificationMsg,
-          "assessment_updates",
-          {},
-          processedUsers,
-        );
-      }
-
-      return null;
-    } catch (err) {
-      console.error("notify2DaysUntilAssessmentCloses failed:", err);
-    }
-  },
+    },
 );
 
 // Last day assessment window closes (if not completed)
 exports.notifyLastDayAssessmentCloses = onSchedule(
-  {
-    schedule: "55 11 * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (event) => {
-    const now = new Date();
+    {
+      schedule: "55 11 * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (event) => {
+      const now = new Date();
 
-    if (!isQuarterFirstMonthDeadline()) {
-      console.log(
-        "Not the last day of the first month of the quarter. Exiting.",
-      );
-      return null;
-    }
+      if (!isQuarterFirstMonthDeadline()) {
+        console.log(
+            "Not the last day of the first month of the quarter. Exiting.",
+        );
+        return null;
+      }
 
-    const currentYear = now.getUTCFullYear();
-    const currentQuarter = getCurrentQuarter();
-    if (!currentQuarter) return null;
+      const currentYear = now.getUTCFullYear();
+      const currentQuarter = getCurrentQuarter();
+      if (!currentQuarter) return null;
 
-    try {
-      const db = admin.firestore();
+      try {
+        const db = admin.firestore();
 
-      // 1. Assessments check
-      const assessmentsSnapshot = await db
-        .collection("assessments")
-        .where("quarter.month", "==", currentQuarter.month)
-        .where("year", "==", currentYear)
-        .where("is_completed", "==", false)
-        .where("isOnboarding", "==", false)
-        .get();
+        // 1. Assessments check
+        const assessmentsSnapshot = await db
+            .collection("assessments")
+            .where("quarter.month", "==", currentQuarter.month)
+            .where("year", "==", currentYear)
+            .where("is_completed", "==", false)
+            .where("isOnboarding", "==", false)
+            .get();
 
-      if (assessmentsSnapshot.empty) return null;
+        if (assessmentsSnapshot.empty) return null;
 
-      const processedUsers = new Set();
+        const processedUsers = new Set();
 
-      const userFetches = assessmentsSnapshot.docs.map(async (doc) => {
-        const data = doc.data();
-        const userRef = data.user_id;
-        if (!userRef || typeof userRef.get !== "function") return null;
+        const userFetches = assessmentsSnapshot.docs.map(async (doc) => {
+          const data = doc.data();
+          const userRef = data.user_id;
+          if (!userRef || typeof userRef.get !== "function") return null;
 
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) return null;
+          const userSnap = await userRef.get();
+          if (!userSnap.exists) return null;
 
-        const userId = userSnap.id;
-        if (processedUsers.has(userId)) return null;
+          const userId = userSnap.id;
+          if (processedUsers.has(userId)) return null;
 
-        const userData = userSnap.data() || {};
-        if (
-          !userData.email ||
+          const userData = userSnap.data() || {};
+          if (
+            !userData.email ||
           !userData.assessment_updates ||
           userData.type !== "policy_holder"
-        ) {
-          return null;
-        }
+          ) {
+            return null;
+          }
 
-        processedUsers.add(userId);
-        return { userId, email: userData.email };
-      });
-
-      const userRecords = (await Promise.all(userFetches)).filter(Boolean);
-      if (userRecords.length === 0) return null;
-
-      // 2. Policies check
-      const startOfDay = new Date(
-        Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate(),
-          0,
-          0,
-          0,
-          0,
-        ),
-      );
-      const endOfDay = new Date(
-        Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate(),
-          23,
-          59,
-          59,
-          999,
-        ),
-      );
-
-      // Split emails into chunks of 10 for Firestore `in` query
-      const allEmails = userRecords.map((u) => u.email);
-      const emailChunks = [];
-      for (let i = 0; i < allEmails.length; i += 10) {
-        emailChunks.push(allEmails.slice(i, i + 10));
-      }
-
-      const policies = [];
-      for (const chunk of emailChunks) {
-        const snap = await db
-          .collection("policies")
-          .where("status", "==", "Active")
-          .where("user_email", "in", chunk)
-          .where("starting_date", "<=", endOfDay)
-          .where("ending_date", ">=", startOfDay)
-          .get();
-        policies.push(...snap.docs.map((d) => d.data()));
-      }
-
-      if (policies.length === 0) return null;
-
-      const updatedUsers = userRecords
-        .map((u) => {
-          const policy = policies.find(
-            (p) => p.user_email === u.email && p.pendingAmount > 0,
-          );
-          if (!policy) return null;
-          return {
-            ...u,
-            locked_amount: policy.pendingAmount || 0,
-          };
-        })
-        .filter(Boolean);
-
-      // 3. Build notifications
-      const perUserMessages = [];
-      const notificationTitle = `Last day assessment window closes`;
-
-      for (const { locked_amount, userId } of updatedUsers) {
-        if (!locked_amount || locked_amount <= 0) continue;
-        const roundedAmount = Number(locked_amount).toFixed(2);
-
-        const body = `Today's the day: bank £${roundedAmount} by completing your assessment.`;
-
-        perUserMessages.push({
-          userId,
-          title: notificationTitle,
-          body,
+          processedUsers.add(userId);
+          return {userId, email: userData.email};
         });
-      }
 
-      if (perUserMessages.length > 0) {
-        await createAppNotifications(
-          notificationTitle,
-          null,
-          "assessment_updates",
-          perUserMessages.map(({ userId, body }) => ({
-            userId,
-            message: body,
-          })),
+        const userRecords = (await Promise.all(userFetches)).filter(Boolean);
+        if (userRecords.length === 0) return null;
+
+        // 2. Policies check
+        const startOfDay = new Date(
+            Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                0,
+                0,
+                0,
+                0,
+            ),
+        );
+        const endOfDay = new Date(
+            Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                23,
+                59,
+                59,
+                999,
+            ),
         );
 
-        await sendPush({
-          perUserMessages, // directly pass the array
-        });
-      }
+        // Split emails into chunks of 10 for Firestore `in` query
+        const allEmails = userRecords.map((u) => u.email);
+        const emailChunks = [];
+        for (let i = 0; i < allEmails.length; i += 10) {
+          emailChunks.push(allEmails.slice(i, i + 10));
+        }
 
-      return null;
-    } catch (err) {
-      console.error("notifyLastDayAssessmentCloses failed:", err);
-      return null;
-    }
-  },
+        const policies = [];
+        for (const chunk of emailChunks) {
+          const snap = await db
+              .collection("policies")
+              .where("status", "==", "Active")
+              .where("user_email", "in", chunk)
+              .where("starting_date", "<=", endOfDay)
+              .where("ending_date", ">=", startOfDay)
+              .get();
+          policies.push(...snap.docs.map((d) => d.data()));
+        }
+
+        if (policies.length === 0) return null;
+
+        const updatedUsers = userRecords
+            .map((u) => {
+              const policy = policies.find(
+                  (p) => p.user_email === u.email && p.pendingAmount > 0,
+              );
+              if (!policy) return null;
+              return {
+                ...u,
+                locked_amount: policy.pendingAmount || 0,
+              };
+            })
+            .filter(Boolean);
+
+        // 3. Build notifications
+        const perUserMessages = [];
+        const notificationTitle = `Last day assessment window closes`;
+
+        for (const {locked_amount, userId} of updatedUsers) {
+          if (!locked_amount || locked_amount <= 0) continue;
+          const roundedAmount = Number(locked_amount).toFixed(2);
+
+          const body = `Today's the day: bank £${roundedAmount} by completing your assessment.`;
+
+          perUserMessages.push({
+            userId,
+            title: notificationTitle,
+            body,
+          });
+        }
+
+        if (perUserMessages.length > 0) {
+          await createAppNotifications(
+              notificationTitle,
+              null,
+              "assessment_updates",
+              perUserMessages.map(({userId, body}) => ({
+                userId,
+                message: body,
+              })),
+          );
+
+          await sendPush({
+            perUserMessages, // directly pass the array
+          });
+        }
+
+        return null;
+      } catch (err) {
+        console.error("notifyLastDayAssessmentCloses failed:", err);
+        return null;
+      }
+    },
 );
 
 // Notify users with incomplete assessments in the first day of the second quarter month,
 // only in Feb, May, Aug, Nov
 exports.notifyMissedAssessments = onSchedule(
-  {
-    schedule: "0 0 1 * *", // runs at 00:00 UTC on the 1st of every month
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    secrets: [BREVO_API_KEY],
-  },
-  async (event) => {
-    const now = new Date();
-    const currentMonth = now.getUTCMonth() + 1; // 1-12
+    {
+      schedule: "0 0 1 * *", // runs at 00:00 UTC on the 1st of every month
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      secrets: [BREVO_API_KEY],
+    },
+    async (event) => {
+      const now = new Date();
+      const currentMonth = now.getUTCMonth() + 1; // 1-12
 
-    // Only run in Feb, May, Aug, Nov
-    const validMonths = [2, 5, 8, 11];
-    if (!validMonths.includes(currentMonth)) return null;
+      // Only run in Feb, May, Aug, Nov
+      const validMonths = [2, 5, 8, 11];
+      if (!validMonths.includes(currentMonth)) return null;
 
-    try {
-      const db = admin.firestore();
+      try {
+        const db = admin.firestore();
 
-      // Get previous quarter
-      const currentYear = now.getUTCFullYear();
-      const currentQuarter = getCurrentQuarter();
-      const { prevQuarter, prevYear } = getPreviousQuarter(
-        currentQuarter,
-        currentYear,
-      );
-      if (!prevQuarter) return null;
+        // Get previous quarter
+        const currentYear = now.getUTCFullYear();
+        const currentQuarter = getCurrentQuarter();
+        const {prevQuarter, prevYear} = getPreviousQuarter(
+            currentQuarter,
+            currentYear,
+        );
+        if (!prevQuarter) return null;
 
-      // 1. Fetch all incomplete, non-onboarding assessments
-      const assessmentsSnapshot = await db
-        .collection("assessments")
-        .where("quarter.month", "==", prevQuarter.month)
-        .where("year", "==", prevYear)
-        .where("is_completed", "==", false)
-        .where("isOnboarding", "==", false)
-        .get();
+        // 1. Fetch all incomplete, non-onboarding assessments
+        const assessmentsSnapshot = await db
+            .collection("assessments")
+            .where("quarter.month", "==", prevQuarter.month)
+            .where("year", "==", prevYear)
+            .where("is_completed", "==", false)
+            .where("isOnboarding", "==", false)
+            .get();
 
-      if (assessmentsSnapshot.empty) return null;
+        if (assessmentsSnapshot.empty) return null;
 
-      // 2. Collect unique users
-      const userRecords = [];
-      for (const doc of assessmentsSnapshot.docs) {
-        const data = doc.data();
-        const userRef = data.user_id;
-        if (!userRef || typeof userRef.get !== "function") continue;
+        // 2. Collect unique users
+        const userRecords = [];
+        for (const doc of assessmentsSnapshot.docs) {
+          const data = doc.data();
+          const userRef = data.user_id;
+          if (!userRef || typeof userRef.get !== "function") continue;
 
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) continue;
+          const userSnap = await userRef.get();
+          if (!userSnap.exists) continue;
 
-        const userId = userSnap.id;
-        if (userRecords.some((u) => u.userId === userId)) continue;
+          const userId = userSnap.id;
+          if (userRecords.some((u) => u.userId === userId)) continue;
 
-        const userData = userSnap.data() || {};
-        if (!userData.email || !userData.assessment_updates) continue;
+          const userData = userSnap.data() || {};
+          if (!userData.email || !userData.assessment_updates) continue;
 
-        userRecords.push({
-          userId,
-          email: userData.email,
-          display_name: userData.display_name,
+          userRecords.push({
+            userId,
+            email: userData.email,
+            display_name: userData.display_name,
+          });
+        }
+
+        if (userRecords.length === 0) return null;
+
+        // 3. Policy check
+        const year = now.getUTCFullYear();
+        const month = now.getUTCMonth();
+        const day = now.getUTCDate();
+        const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+        const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
+
+        const emailChunks = [];
+        const allEmails = userRecords.map((u) => u.email);
+        for (let i = 0; i < allEmails.length; i += 10) {
+          emailChunks.push(allEmails.slice(i, i + 10));
+        }
+
+        const policies = [];
+        for (const chunk of emailChunks) {
+          const snap = await db
+              .collection("policies")
+              .where("status", "==", "Active")
+              .where("user_email", "in", chunk)
+              .where("starting_date", "<=", endOfDay)
+              .where("ending_date", ">=", startOfDay)
+              .get();
+
+          snap.docs.forEach((doc) => {
+            policies.push({ref: doc.ref, ...doc.data()});
+          });
+        }
+
+        if (policies.length === 0) return null;
+
+        // 4. Compute locked_amount **before updating pendingAmount**
+        const updatedUsers = userRecords
+            .map((u) => {
+              const policy = policies.find(
+                  (p) => p.user_email === u.email && p.pendingAmount > 0,
+              );
+              if (!policy) return null;
+              return {
+                ...u,
+                locked_amount: policy.pendingAmount || 0,
+                policyRef: policy.ref, // keep for batch update
+              };
+            })
+            .filter(Boolean);
+
+        if (updatedUsers.length === 0) return null;
+
+        // 5. Reset pendingAmount = 0 for these policies
+        const batch = db.batch();
+        updatedUsers.forEach((u) => {
+          batch.update(u.policyRef, {pendingAmount: 0});
         });
-      }
+        await batch.commit();
 
-      if (userRecords.length === 0) return null;
+        // 6. Send emails per user
+        for (const u of updatedUsers) {
+          const roundedAmount = Number(u.locked_amount).toFixed(2);
 
-      // 3. Policy check
-      const year = now.getUTCFullYear();
-      const month = now.getUTCMonth();
-      const day = now.getUTCDate();
-      const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
-      const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
-
-      const emailChunks = [];
-      const allEmails = userRecords.map((u) => u.email);
-      for (let i = 0; i < allEmails.length; i += 10) {
-        emailChunks.push(allEmails.slice(i, i + 10));
-      }
-
-      const policies = [];
-      for (const chunk of emailChunks) {
-        const snap = await db
-          .collection("policies")
-          .where("status", "==", "Active")
-          .where("user_email", "in", chunk)
-          .where("starting_date", "<=", endOfDay)
-          .where("ending_date", ">=", startOfDay)
-          .get();
-
-        snap.docs.forEach((doc) => {
-          policies.push({ ref: doc.ref, ...doc.data() });
-        });
-      }
-
-      if (policies.length === 0) return null;
-
-      // 4. Compute locked_amount **before updating pendingAmount**
-      const updatedUsers = userRecords
-        .map((u) => {
-          const policy = policies.find(
-            (p) => p.user_email === u.email && p.pendingAmount > 0,
-          );
-          if (!policy) return null;
-          return {
-            ...u,
-            locked_amount: policy.pendingAmount || 0,
-            policyRef: policy.ref, // keep for batch update
-          };
-        })
-        .filter(Boolean);
-
-      if (updatedUsers.length === 0) return null;
-
-      // 5. Reset pendingAmount = 0 for these policies
-      const batch = db.batch();
-      updatedUsers.forEach((u) => {
-        batch.update(u.policyRef, { pendingAmount: 0 });
-      });
-      await batch.commit();
-
-      // 6. Send emails per user
-      for (const u of updatedUsers) {
-        const roundedAmount = Number(u.locked_amount).toFixed(2);
-
-        await sendEmail(
-          BREVO_API_KEY.value(),
-          "Your rebate expired — here's how to start again",
-          `
+          await sendEmail(
+              BREVO_API_KEY.value(),
+              "Your rebate expired — here's how to start again",
+              `
     <html>
       <body>
         <p>Hi ${u.display_name},</p>
@@ -1932,48 +1932,48 @@ exports.notifyMissedAssessments = onSchedule(
       </body>
     </html>
     `,
-          "",
-          [u], // ✅ correct and consistent with previous usage
-        );
+              "",
+              [u], // ✅ correct and consistent with previous usage
+          );
+        }
+
+        // 7. Build per-user notifications
+
+        const perUserMessages = updatedUsers
+            .filter((u) => u.locked_amount > 0)
+            .map((u) => {
+              const roundedAmount = Number(u.locked_amount).toFixed(2);
+
+              return {
+                userId: u.userId,
+                title: "Oh no! You missed your assessment",
+                body: `⚠️ Your £${roundedAmount} rebate expired. Do your next assessment to start again.`,
+                data: {
+                  locked_amount: String(roundedAmount), // ✅ rounded + string
+                },
+              };
+            });
+
+        if (perUserMessages.length > 0) {
+          await createAppNotifications(
+              "Oh no! You missed your assessment",
+              null,
+              "assessment_updates",
+              perUserMessages.map(({userId, body}) => ({
+                userId,
+                message: body,
+              })),
+          );
+
+          await sendPush({perUserMessages});
+        }
+
+        return null;
+      } catch (err) {
+        console.error("notifyMissedAssessments failed:", err);
+        return null;
       }
-
-      // 7. Build per-user notifications
-
-      const perUserMessages = updatedUsers
-        .filter((u) => u.locked_amount > 0)
-        .map((u) => {
-          const roundedAmount = Number(u.locked_amount).toFixed(2);
-
-          return {
-            userId: u.userId,
-            title: "Oh no! You missed your assessment",
-            body: `⚠️ Your £${roundedAmount} rebate expired. Do your next assessment to start again.`,
-            data: {
-              locked_amount: String(roundedAmount), // ✅ rounded + string
-            },
-          };
-        });
-
-      if (perUserMessages.length > 0) {
-        await createAppNotifications(
-          "Oh no! You missed your assessment",
-          null,
-          "assessment_updates",
-          perUserMessages.map(({ userId, body }) => ({
-            userId,
-            message: body,
-          })),
-        );
-
-        await sendPush({ perUserMessages });
-      }
-
-      return null;
-    } catch (err) {
-      console.error("notifyMissedAssessments failed:", err);
-      return null;
-    }
-  },
+    },
 );
 
 // Firestore function for sending Meta "Lead", "Schedule", "Contact", "Purchase" events
@@ -1981,261 +1981,261 @@ exports.notifyMissedAssessments = onSchedule(
 // 1️⃣ onCreate trigger: new leads
 // ----------------------------------------
 exports.metaCreateNew = onDocumentCreated(
-  {
-    document: "leads/{leadId}",
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    secrets: [PIXEL_ID, ACCESS_TOKEN],
-  },
-  async (event) => {
-    const lead = event.data?.data();
+    {
+      document: "leads/{leadId}",
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      secrets: [PIXEL_ID, ACCESS_TOKEN],
+    },
+    async (event) => {
+      const lead = event.data?.data();
 
-    // Only Meta leads have eventType
-    if (!lead?.eventType) {
-      console.log(
-        `Lead ${lead?.user_email} has no eventType, skipping Meta create.`,
-      );
-      return;
-    }
+      // Only Meta leads have eventType
+      if (!lead?.eventType) {
+        console.log(
+            `Lead ${lead?.user_email} has no eventType, skipping Meta create.`,
+        );
+        return;
+      }
 
-    try {
+      try {
       // Always send Lead on creation
-      await sendMetaEvent(
-        "Lead",
-        {
-          email: lead.user_email,
-          premiumValue: lead.premiumValue,
-          fbclid: lead.meta_ids?.fbclid,
-          client_user_agent: lead?.userAgent,
-          client_ip_address: lead?.ipAddress,
-          first_name: lead?.display_name,
-          country: lead?.country,
-          city: lead?.city,
-        },
-        PIXEL_ID.value(),
-        ACCESS_TOKEN.value(),
-      );
+        await sendMetaEvent(
+            "Lead",
+            {
+              email: lead.user_email,
+              premiumValue: lead.premiumValue,
+              fbclid: lead.meta_ids?.fbclid,
+              client_user_agent: lead?.userAgent,
+              client_ip_address: lead?.ipAddress,
+              first_name: lead?.display_name,
+              country: lead?.country,
+              city: lead?.city,
+            },
+            PIXEL_ID.value(),
+            ACCESS_TOKEN.value(),
+        );
 
-      console.log(`Meta Lead event sent for new lead: ${lead.user_email}`);
-    } catch (err) {
-      console.error("Failed to send Meta event for new lead:", err);
-    }
-  },
+        console.log(`Meta Lead event sent for new lead: ${lead.user_email}`);
+      } catch (err) {
+        console.error("Failed to send Meta event for new lead:", err);
+      }
+    },
 );
 
 exports.metaUpdateNew = onDocumentUpdated(
-  {
-    document: "leads/{leadId}",
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-    secrets: [PIXEL_ID, ACCESS_TOKEN],
-  },
-  async (event) => {
-    const before = event.data?.before?.data() || {};
-    const after = event.data?.after?.data() || {};
+    {
+      document: "leads/{leadId}",
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+      secrets: [PIXEL_ID, ACCESS_TOKEN],
+    },
+    async (event) => {
+      const before = event.data?.before?.data() || {};
+      const after = event.data?.after?.data() || {};
 
-    // Only Meta leads have eventType
-    if (!after.eventType) {
-      console.log(
-        `Lead ${after.user_email} has no eventType, skipping Meta update.`,
-      );
-      return;
-    }
+      // Only Meta leads have eventType
+      if (!after.eventType) {
+        console.log(
+            `Lead ${after.user_email} has no eventType, skipping Meta update.`,
+        );
+        return;
+      }
 
-    // Skip repeated Lead updates
-    if (after.eventType === "Lead") {
-      console.log(
-        `Lead ${after.user_email} already processed as Lead, skipping.`,
-      );
-      return;
-    }
+      // Skip repeated Lead updates
+      if (after.eventType === "Lead") {
+        console.log(
+            `Lead ${after.user_email} already processed as Lead, skipping.`,
+        );
+        return;
+      }
 
-    const phoneChanged = after.phone_number !== before.phone_number;
-    const premiumChanged = after.premiumValue !== before.premiumValue;
-    const eventTypeChanged = after.eventType !== before.eventType;
+      const phoneChanged = after.phone_number !== before.phone_number;
+      const premiumChanged = after.premiumValue !== before.premiumValue;
+      const eventTypeChanged = after.eventType !== before.eventType;
 
-    const shouldSendMeta = phoneChanged || premiumChanged || eventTypeChanged;
+      const shouldSendMeta = phoneChanged || premiumChanged || eventTypeChanged;
 
-    if (!shouldSendMeta) {
-      return;
-    }
+      if (!shouldSendMeta) {
+        return;
+      }
 
-    try {
-      await sendMetaEvent(
-        after.eventType,
-        {
-          email: after.user_email,
-          phone: after.phone_number,
-          premiumValue: after.premiumValue,
-          fbclid: after.meta_ids?.fbclid,
-          client_user_agent: after?.userAgent,
-          client_ip_address: after?.ipAddress,
-          first_name: after?.display_name,
-          country: after?.country,
-          city: after?.city,
-        },
-        PIXEL_ID.value(),
-        ACCESS_TOKEN.value(),
-      );
+      try {
+        await sendMetaEvent(
+            after.eventType,
+            {
+              email: after.user_email,
+              phone: after.phone_number,
+              premiumValue: after.premiumValue,
+              fbclid: after.meta_ids?.fbclid,
+              client_user_agent: after?.userAgent,
+              client_ip_address: after?.ipAddress,
+              first_name: after?.display_name,
+              country: after?.country,
+              city: after?.city,
+            },
+            PIXEL_ID.value(),
+            ACCESS_TOKEN.value(),
+        );
 
-      console.log(
-        `Meta event "${after.eventType}" sent for updated lead: ${after.user_email}`,
-      );
-    } catch (err) {
-      console.error(
-        `Failed to send Meta event for updated lead ${after.user_email}:`,
-        err,
-      );
-    }
-  },
+        console.log(
+            `Meta event "${after.eventType}" sent for updated lead: ${after.user_email}`,
+        );
+      } catch (err) {
+        console.error(
+            `Failed to send Meta event for updated lead ${after.user_email}:`,
+            err,
+        );
+      }
+    },
 );
 
 exports.getPoliciesList = onRequest(
-  {
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (req, res) => {
-    if (req.method === "OPTIONS") return res.status(204).send("");
+    {
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (req, res) => {
+      if (req.method === "OPTIONS") return res.status(204).send("");
 
-    const authorizationHeader = req.headers.authorization;
-    if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized - Bearer token required." });
-    }
-
-    const idToken = authorizationHeader.split("Bearer ")[1];
-
-    try {
-      await admin.auth().verifyIdToken(idToken);
-      const db = admin.firestore();
-
-      const pageSize = parseInt(req.query.pageSize, 10) || 10;
-      const pageToken = req.query.pageToken || null;
-      const pageNumber = parseInt(req.query.pageNumber, 10) || null;
-      const direction = req.query.direction || "next"; // "next" or "prev"
-
-      const search = (req.query.search || "").trim().toLowerCase();
-      const statusFilter = (req.query.status || "").trim();
-      const partnerFilter = (req.query.partner || "").trim();
-
-      // ---- Base Query: apply Firestore filterable fields (status) ----
-      let baseQuery = db.collection("policies");
-      if (statusFilter) {
-        baseQuery = baseQuery.where("status", "==", statusFilter);
+      const authorizationHeader = req.headers.authorization;
+      if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
+        return res
+            .status(401)
+            .json({error: "Unauthorized - Bearer token required."});
       }
-      baseQuery = baseQuery.orderBy(FieldPath.documentId());
 
-      // ---- Get all docs for filtering ----
-      const allSnap = await baseQuery.get();
-      const allDocs = allSnap.docs;
+      const idToken = authorizationHeader.split("Bearer ")[1];
 
-      // ---- Resolve users & partners, apply search + partner filter ----
-      const results = [];
-      for (const policyDoc of allDocs) {
-        const data = policyDoc.data();
+      try {
+        await admin.auth().verifyIdToken(idToken);
+        const db = admin.firestore();
 
-        // ---- Policy holder user ----
-        // ---- Policy holder user ----
-        let displayName = "N/A";
-        let email = data.user_email || "N/A";
-        let photo = null;
+        const pageSize = parseInt(req.query.pageSize, 10) || 10;
+        const pageToken = req.query.pageToken || null;
+        const pageNumber = parseInt(req.query.pageNumber, 10) || null;
+        const direction = req.query.direction || "next"; // "next" or "prev"
 
-        try {
-          const userSnap = await db
-            .collection("users")
-            .where("email", "==", data.user_email || "")
-            .limit(1)
-            .get();
+        const search = (req.query.search || "").trim().toLowerCase();
+        const statusFilter = (req.query.status || "").trim();
+        const partnerFilter = (req.query.partner || "").trim();
 
-          if (!userSnap.empty) {
-            const user = userSnap.docs[0].data();
-            displayName = user.display_name || displayName;
-            email = user.email || email;
-            photo = user.photo_url || null;
-          }
-        } catch (err) {
-          console.error("Error fetching user:", err.message);
+        // ---- Base Query: apply Firestore filterable fields (status) ----
+        let baseQuery = db.collection("policies");
+        if (statusFilter) {
+          baseQuery = baseQuery.where("status", "==", statusFilter);
         }
+        baseQuery = baseQuery.orderBy(FieldPath.documentId());
 
-        // ---- Search filter ----
-        const searchMatch =
+        // ---- Get all docs for filtering ----
+        const allSnap = await baseQuery.get();
+        const allDocs = allSnap.docs;
+
+        // ---- Resolve users & partners, apply search + partner filter ----
+        const results = [];
+        for (const policyDoc of allDocs) {
+          const data = policyDoc.data();
+
+          // ---- Policy holder user ----
+          // ---- Policy holder user ----
+          let displayName = "N/A";
+          let email = data.user_email || "N/A";
+          let photo = null;
+
+          try {
+            const userSnap = await db
+                .collection("users")
+                .where("email", "==", data.user_email || "")
+                .limit(1)
+                .get();
+
+            if (!userSnap.empty) {
+              const user = userSnap.docs[0].data();
+              displayName = user.display_name || displayName;
+              email = user.email || email;
+              photo = user.photo_url || null;
+            }
+          } catch (err) {
+            console.error("Error fetching user:", err.message);
+          }
+
+          // ---- Search filter ----
+          const searchMatch =
           !search ||
           displayName.toLowerCase().includes(search) ||
           email.toLowerCase().includes(search) ||
           String(data.monthly_price || "")
-            .toLowerCase()
-            .includes(search) ||
+              .toLowerCase()
+              .includes(search) ||
           String(data.policy_id || "")
-            .toLowerCase()
-            .includes(search) ||
+              .toLowerCase()
+              .includes(search) ||
           String(data.carrier || "")
-            .toLowerCase()
-            .includes(search) ||
+              .toLowerCase()
+              .includes(search) ||
           String(data.status || "")
-            .toLowerCase()
-            .includes(search);
-        if (!searchMatch) continue;
+              .toLowerCase()
+              .includes(search);
+          if (!searchMatch) continue;
 
-        // ---- Partner filter ----
-        let partnerType = "N/A";
-        if (data.partner_ref) {
-          try {
-            const partnerSnap = await data.partner_ref.get();
-            if (partnerSnap.exists) {
-              const partnerData = partnerSnap.data();
-              partnerType = partnerData.partner_type || "N/A";
+          // ---- Partner filter ----
+          let partnerType = "N/A";
+          if (data.partner_ref) {
+            try {
+              const partnerSnap = await data.partner_ref.get();
+              if (partnerSnap.exists) {
+                const partnerData = partnerSnap.data();
+                partnerType = partnerData.partner_type || "N/A";
+              }
+            } catch (err) {
+              console.error("Error fetching partner_ref:", err.message);
             }
-          } catch (err) {
-            console.error("Error fetching partner_ref:", err.message);
           }
+          if (partnerFilter && partnerType !== partnerFilter) continue;
+
+          // ---- Push final record ----
+          results.push({
+            id_ref: policyDoc.id,
+            policy_id: data.policy_id || null,
+            carrier: data.carrier || null,
+            photo_url: photo,
+            user_email: data.user_email,
+            display_name: displayName,
+            monthly_price: data.monthly_price || null,
+            starting_date: data.starting_date?.toDate?.().toISOString?.() || null,
+            ending_date: data.ending_date?.toDate?.().toISOString?.() || null,
+            status: data.status || null,
+            partner_type: partnerType,
+          });
         }
-        if (partnerFilter && partnerType !== partnerFilter) continue;
 
-        // ---- Push final record ----
-        results.push({
-          id_ref: policyDoc.id,
-          policy_id: data.policy_id || null,
-          carrier: data.carrier || null,
-          photo_url: photo,
-          user_email: data.user_email,
-          display_name: displayName,
-          monthly_price: data.monthly_price || null,
-          starting_date: data.starting_date?.toDate?.().toISOString?.() || null,
-          ending_date: data.ending_date?.toDate?.().toISOString?.() || null,
-          status: data.status || null,
-          partner_type: partnerType,
+        const pagination = paginate(results, {
+          pageSize,
+          pageToken,
+          pageNumber,
+          direction,
+          tokenKeyExtractor: (item) => item.policy_id,
         });
+
+        return res.status(200).json({
+          policies: pagination.data,
+          nextPageToken: pagination.nextPageToken,
+          prevPageToken: pagination.prevPageToken,
+          totalCount: pagination.totalCount,
+          totalPages: pagination.totalPages,
+          currentPage: pagination.currentPage,
+        });
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({error: err.message});
       }
-
-      const pagination = paginate(results, {
-        pageSize,
-        pageToken,
-        pageNumber,
-        direction,
-        tokenKeyExtractor: (item) => item.policy_id,
-      });
-
-      return res.status(200).json({
-        policies: pagination.data,
-        nextPageToken: pagination.nextPageToken,
-        prevPageToken: pagination.prevPageToken,
-        totalCount: pagination.totalCount,
-        totalPages: pagination.totalPages,
-        currentPage: pagination.currentPage,
-      });
-    } catch (err) {
-      console.error(err);
-      return res.status(500).json({ error: err.message });
-    }
-  },
+    },
 );
 
 exports.getUserAssessments = onRequest(async (req, res) => {
@@ -2254,9 +2254,9 @@ exports.getUserAssessments = onRequest(async (req, res) => {
     // const garmin = req.query.garmin;
     // 🔹 Query assessments where user_id is the reference
     const snapshot = await db
-      .collection("cardios")
-      .where("user_id", "==", userRef)
-      .get();
+        .collection("cardios")
+        .where("user_id", "==", userRef)
+        .get();
 
     // const snapshot = await db
     //   .collection("users")
@@ -2274,9 +2274,9 @@ exports.getUserAssessments = onRequest(async (req, res) => {
     }));
 
     console.log(
-      `✅ Found ${assessments.length} assessments for user ${userId}`,
+        `✅ Found ${assessments.length} assessments for user ${userId}`,
     );
-    return res.status(200).json({ count: assessments.length, assessments });
+    return res.status(200).json({count: assessments.length, assessments});
   } catch (error) {
     console.error("❌ Error fetching assessments:", error);
     return res.status(500).send("Error fetching assessments: " + error.message);
@@ -2284,361 +2284,361 @@ exports.getUserAssessments = onRequest(async (req, res) => {
 });
 
 exports.getPolicyAvailableAmount = onRequest(
-  {
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (req, res) => {
-    try {
-      // Handle preflight CORS request
-      if (req.method === "OPTIONS") {
-        return res.status(204).send("");
-      }
-
-      // Firebase ID Token authentication
-      const authorizationHeader = req.headers.authorization;
-      if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
-        console.warn("Unauthorized: No Firebase ID token found.");
-        return res.status(401).json({
-          error: "Unauthorized",
-          message: "Bearer token required.",
-        });
-      }
-
-      const idToken = authorizationHeader.split("Bearer ")[1];
+    {
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (req, res) => {
       try {
-        await admin.auth().verifyIdToken(idToken);
-      } catch (err) {
-        console.warn("Unauthorized: Invalid Firebase ID token.", err);
-        return res.status(401).json({
-          error: "Unauthorized",
-          message: "Invalid Firebase ID token.",
-        });
+      // Handle preflight CORS request
+        if (req.method === "OPTIONS") {
+          return res.status(204).send("");
+        }
+
+        // Firebase ID Token authentication
+        const authorizationHeader = req.headers.authorization;
+        if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
+          console.warn("Unauthorized: No Firebase ID token found.");
+          return res.status(401).json({
+            error: "Unauthorized",
+            message: "Bearer token required.",
+          });
+        }
+
+        const idToken = authorizationHeader.split("Bearer ")[1];
+        try {
+          await admin.auth().verifyIdToken(idToken);
+        } catch (err) {
+          console.warn("Unauthorized: Invalid Firebase ID token.", err);
+          return res.status(401).json({
+            error: "Unauthorized",
+            message: "Invalid Firebase ID token.",
+          });
+        }
+
+        // Validate input
+        const policyId = req.query.policyId;
+        if (!policyId) return res.status(400).send("Missing policyId");
+
+        // Fetch policy document
+        const doc = await admin
+            .firestore()
+            .collection("policies")
+            .doc(policyId)
+            .get();
+        if (!doc.exists) return res.status(404).send("Policy not found");
+
+        const data = doc.data();
+
+        // Ensure availableAmount and monthly_price are doubles
+        const availableAmount = Number(data.availableAmount ?? 0);
+
+        return res.status(200).json({availableAmount});
+      } catch (error) {
+        console.error("❌ Error fetching policy:", error);
+        return res.status(500).send("Error fetching policy: " + error.message);
       }
-
-      // Validate input
-      const policyId = req.query.policyId;
-      if (!policyId) return res.status(400).send("Missing policyId");
-
-      // Fetch policy document
-      const doc = await admin
-        .firestore()
-        .collection("policies")
-        .doc(policyId)
-        .get();
-      if (!doc.exists) return res.status(404).send("Policy not found");
-
-      const data = doc.data();
-
-      // Ensure availableAmount and monthly_price are doubles
-      const availableAmount = Number(data.availableAmount ?? 0);
-
-      return res.status(200).json({ availableAmount });
-    } catch (error) {
-      console.error("❌ Error fetching policy:", error);
-      return res.status(500).send("Error fetching policy: " + error.message);
-    }
-  },
+    },
 );
 
 exports.assignPartnerAndCallPartnerAPI = onDocumentCreated(
-  {
-    document: "leads/{leadId}",
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (event) => {
-    const leadData = event.data?.data();
-    const leadId = event.params.leadId;
-    const leadRef = admin.firestore().collection("leads").doc(leadId);
+    {
+      document: "leads/{leadId}",
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (event) => {
+      const leadData = event.data?.data();
+      const leadId = event.params.leadId;
+      const leadRef = admin.firestore().collection("leads").doc(leadId);
 
-    if (!leadData) {
-      console.warn(`No data found for lead ${leadId}`);
-      return;
-    }
+      if (!leadData) {
+        console.warn(`No data found for lead ${leadId}`);
+        return;
+      }
 
-    try {
+      try {
       // -----------------------------
       // 1️⃣ Find a Partner user dynamically
       // -----------------------------
-      const partnerSnapshot = await admin
-        .firestore()
-        .collection("users")
-        .where("role", "==", "Partner")
-        .limit(1)
-        .get();
+        const partnerSnapshot = await admin
+            .firestore()
+            .collection("users")
+            .where("role", "==", "Partner")
+            .limit(1)
+            .get();
 
-      if (partnerSnapshot.empty) {
-        console.warn("⚠️ No Partner found in users collection.");
-        return;
-      }
+        if (partnerSnapshot.empty) {
+          console.warn("⚠️ No Partner found in users collection.");
+          return;
+        }
 
-      const partnerDoc = partnerSnapshot.docs[0];
-      const partnerRef = partnerDoc.ref;
-
-      await leadRef.update({
-        partner_type: partnerRef,
-      });
-
-      console.log(`✅ Lead ${leadId} assigned to Partner (${partnerDoc.id})`);
-
-      // -----------------------------
-      // 2️⃣ Prepare fields for Lunar CRM
-      // -----------------------------
-      let firstName = "";
-      let surname = "";
-
-      if (leadData.display_name) {
-        const nameParts = leadData.display_name.trim().split(" ");
-        firstName = nameParts[0] || "";
-        surname = nameParts.slice(1).join(" ") || "";
-      }
-
-      if (!surname) surname = "Unknown";
-      if (!leadData.display_name) {
-        console.warn(
-          `⛔ Lead ${leadId} missing display_name — skipping Lunar CRM API`,
-        );
-        return;
-      }
-
-      if (!firstName) {
-        console.warn(
-          `⛔ Lead ${leadId} missing firstName — skipping Lunar CRM API`,
-        );
-        return;
-      }
-
-      const apiParams = {
-        MediaCampaignID: 17301,
-        Amount: 1,
-        App1FirstName: firstName,
-        App1Surname: surname,
-        App1MobileTelephone: leadData.phone_number || "",
-        ProductType: "Life Insurance",
-      };
-
-      console.log(
-        `📤 Calling Lunar CRM API for lead ${leadId} with params:`,
-        apiParams,
-      );
-
-      // -----------------------------
-      // 3️⃣ Call Lunar CRM API
-      // -----------------------------
-      const apiUrl =
-        "https://n8n.lifeathlete.co/webhook/7f3c6e7c-72a7-43f9-a556-b0147877af17";
-
-      const response = await axios.get(apiUrl, { params: apiParams });
-
-      // -----------------------------
-      // 4️⃣ Handle API response
-      // -----------------------------
-      if (
-        response.data?.status === "success" &&
-        response.data?.lunarMediaResponse
-      ) {
-        const partnerExternalId = response.data.lunarMediaResponse;
+        const partnerDoc = partnerSnapshot.docs[0];
+        const partnerRef = partnerDoc.ref;
 
         await leadRef.update({
-          partner_external_id: partnerExternalId,
+          partner_type: partnerRef,
         });
 
+        console.log(`✅ Lead ${leadId} assigned to Partner (${partnerDoc.id})`);
+
+        // -----------------------------
+        // 2️⃣ Prepare fields for Lunar CRM
+        // -----------------------------
+        let firstName = "";
+        let surname = "";
+
+        if (leadData.display_name) {
+          const nameParts = leadData.display_name.trim().split(" ");
+          firstName = nameParts[0] || "";
+          surname = nameParts.slice(1).join(" ") || "";
+        }
+
+        if (!surname) surname = "Unknown";
+        if (!leadData.display_name) {
+          console.warn(
+              `⛔ Lead ${leadId} missing display_name — skipping Lunar CRM API`,
+          );
+          return;
+        }
+
+        if (!firstName) {
+          console.warn(
+              `⛔ Lead ${leadId} missing firstName — skipping Lunar CRM API`,
+          );
+          return;
+        }
+
+        const apiParams = {
+          MediaCampaignID: 17301,
+          Amount: 1,
+          App1FirstName: firstName,
+          App1Surname: surname,
+          App1MobileTelephone: leadData.phone_number || "",
+          ProductType: "Life Insurance",
+        };
+
         console.log(
-          `✅ Lead ${leadId} updated with partner_external_id: ${partnerExternalId}`,
+            `📤 Calling Lunar CRM API for lead ${leadId} with params:`,
+            apiParams,
         );
-      } else {
-        console.warn(
-          `⚠️ API did not return lunarMediaResponse for lead ${leadId}:`,
-          response.data,
-        );
+
+        // -----------------------------
+        // 3️⃣ Call Lunar CRM API
+        // -----------------------------
+        const apiUrl =
+        "https://n8n.lifeathlete.co/webhook/7f3c6e7c-72a7-43f9-a556-b0147877af17";
+
+        const response = await axios.get(apiUrl, {params: apiParams});
+
+        // -----------------------------
+        // 4️⃣ Handle API response
+        // -----------------------------
+        if (
+          response.data?.status === "success" &&
+        response.data?.lunarMediaResponse
+        ) {
+          const partnerExternalId = response.data.lunarMediaResponse;
+
+          await leadRef.update({
+            partner_external_id: partnerExternalId,
+          });
+
+          console.log(
+              `✅ Lead ${leadId} updated with partner_external_id: ${partnerExternalId}`,
+          );
+        } else {
+          console.warn(
+              `⚠️ API did not return lunarMediaResponse for lead ${leadId}:`,
+              response.data,
+          );
+        }
+      } catch (error) {
+        console.error(`❌ Error processing lead ${leadId}:`, error);
       }
-    } catch (error) {
-      console.error(`❌ Error processing lead ${leadId}:`, error);
-    }
-  },
+    },
 );
 
 exports.getUserRole = onRequest(
-  {
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (req, res) => {
-    const userId = req.query.userId; // pass ?userId=abc123
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    {
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (req, res) => {
+      const userId = req.query.userId; // pass ?userId=abc123
+      if (!userId) return res.status(400).json({error: "Missing userId"});
 
-    try {
-      const userDoc = await admin
-        .firestore()
-        .collection("users")
-        .doc(userId)
-        .get();
-      if (!userDoc.exists) {
-        return res.status(404).json({ error: "User not found" });
+      try {
+        const userDoc = await admin
+            .firestore()
+            .collection("users")
+            .doc(userId)
+            .get();
+        if (!userDoc.exists) {
+          return res.status(404).json({error: "User not found"});
+        }
+
+        const role = userDoc.data().role || "undefined";
+        res.json({userId, role});
+      } catch (error) {
+        res.status(500).json({error: error.message});
       }
-
-      const role = userDoc.data().role || "undefined";
-      res.json({ userId, role });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  },
+    },
 );
 
 exports.getAllLeadsForCsv = onRequest(
-  {
-    cors: true,
-    region: "europe-west2",
-    timeoutSeconds: 540,
-    memory: "1GiB",
-  },
-  async (req, res) => {
-    try {
-      const leadsSnap = await admin.firestore().collection("leads").get();
-      if (leadsSnap.empty) {
-        return res.send(JSON.stringify([])); // return empty array as string
-      }
+    {
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "1GiB",
+    },
+    async (req, res) => {
+      try {
+        const leadsSnap = await admin.firestore().collection("leads").get();
+        if (leadsSnap.empty) {
+          return res.send(JSON.stringify([])); // return empty array as string
+        }
 
-      const leadDocs = leadsSnap.docs;
-      leadDocs.sort((a, b) => {
-        const aData = a.data();
-        const bData = b.data();
+        const leadDocs = leadsSnap.docs;
+        leadDocs.sort((a, b) => {
+          const aData = a.data();
+          const bData = b.data();
 
-        const aDate =
+          const aDate =
           aData.modified_open?.toDate() ||
           aData.created_at?.toDate() ||
           new Date(0);
-        const bDate =
+          const bDate =
           bData.modified_open?.toDate() ||
           bData.created_at?.toDate() ||
           new Date(0);
 
-        return bDate - aDate; // descending
-      });
+          return bDate - aDate; // descending
+        });
 
-      const leadPromises = leadDocs.map(async (leadDoc) => {
-        const lead = leadDoc.data();
-        const leadRef = leadDoc.ref;
+        const leadPromises = leadDocs.map(async (leadDoc) => {
+          const lead = leadDoc.data();
+          const leadRef = leadDoc.ref;
 
-        // Partner Allocated
-        let partnerAllocated = null;
-        try {
-          if (
-            lead.partner_type &&
+          // Partner Allocated
+          let partnerAllocated = null;
+          try {
+            if (
+              lead.partner_type &&
             typeof lead.partner_type.get === "function"
-          ) {
-            const partnerSnap = await lead.partner_type.get();
-            if (partnerSnap.exists) {
-              partnerAllocated = partnerSnap.data().display_name || null;
-            }
-          } else if (
-            lead.partner_type &&
+            ) {
+              const partnerSnap = await lead.partner_type.get();
+              if (partnerSnap.exists) {
+                partnerAllocated = partnerSnap.data().display_name || null;
+              }
+            } else if (
+              lead.partner_type &&
             typeof lead.partner_type === "string"
-          ) {
-            const cleaned = lead.partner_type.replace(/^\/+/, "");
-            const partnerSnap = await admin.firestore().doc(cleaned).get();
-            if (partnerSnap.exists) {
-              partnerAllocated = partnerSnap.data().display_name || null;
+            ) {
+              const cleaned = lead.partner_type.replace(/^\/+/, "");
+              const partnerSnap = await admin.firestore().doc(cleaned).get();
+              if (partnerSnap.exists) {
+                partnerAllocated = partnerSnap.data().display_name || null;
+              }
             }
+          } catch (e) {
+            partnerAllocated = null;
           }
-        } catch (e) {
-          partnerAllocated = null;
-        }
 
-        // Policy info
-        let policy = null;
-        try {
-          const policySnap = await admin
-            .firestore()
-            .collection("policies")
-            .where("leads_ref", "==", leadRef)
-            .limit(1)
-            .get();
+          // Policy info
+          let policy = null;
+          try {
+            const policySnap = await admin
+                .firestore()
+                .collection("policies")
+                .where("leads_ref", "==", leadRef)
+                .limit(1)
+                .get();
 
-          if (!policySnap.empty) {
-            const p = policySnap.docs[0].data();
-            policy = {
-              "Policy ID": p.policy_id || null,
-              "Starting Date": p.starting_date
-                ? p.starting_date.toDate().toISOString()
-                : null,
-              "Ending Date": p.ending_date
-                ? p.ending_date.toDate().toISOString()
-                : null,
-              "Policy Status": p.status || null,
-              "Monthly Premium": p.monthly_price || null,
-            };
+            if (!policySnap.empty) {
+              const p = policySnap.docs[0].data();
+              policy = {
+                "Policy ID": p.policy_id || null,
+                "Starting Date": p.starting_date ?
+                p.starting_date.toDate().toISOString() :
+                null,
+                "Ending Date": p.ending_date ?
+                p.ending_date.toDate().toISOString() :
+                null,
+                "Policy Status": p.status || null,
+                "Monthly Premium": p.monthly_price || null,
+              };
+            }
+          } catch (e) {
+            policy = null;
           }
-        } catch (e) {
-          policy = null;
-        }
 
-        // Build output object (same as before)
-        const out = {
-          "User's Name": lead.display_name || lead.name || null,
-          "User's Email": lead.user_email || lead.email || null,
-          "Phone Number": lead.phone_number || null,
-          "Exercise/ Fitness Info": getExerciseFitnessInfo(lead),
-          "UTM Source": lead.utm_params?.utm_source || null,
-          "UTM Medium": lead.utm_params?.utm_medium || null,
-          "UTM campaign": lead.utm_params?.utm_campaign || null,
-          "FB- campaign id": lead.meta_ids?.campaign_id || null,
-          "FB - Ad id": lead.meta_ids?.ad_id || null,
-          "FB- adset id": lead.meta_ids?.adset_id || null,
-          "Partner Allocated": partnerAllocated,
-          Status: lead.status || null,
-          "Status open": lead.modified_open
-            ? lead.modified_open.toDate().toISOString()
-            : null,
-          "Status- call booked": lead.modified_first_call_scheduled
-            ? lead.modified_first_call_scheduled.toDate().toISOString()
-            : null,
-          "Status - call attended": lead.modified_first_call_attended
-            ? lead.modified_first_call_attended.toDate().toISOString()
-            : null,
-          "Gp referral": lead.modified_gp_referral
-            ? lead.modified_gp_referral.toDate().toISOString()
-            : null,
-          Purchased: lead.modified_purchased
-            ? lead.modified_purchased.toDate().toISOString()
-            : null,
-          Closed: lead.modified_closed
-            ? lead.modified_closed.toDate().toISOString()
-            : null,
-          "Policy ID": policy ? policy["Policy ID"] : null,
-          "Starting Date": policy ? policy["Starting Date"] : null,
-          "Ending Date": policy ? policy["Ending Date"] : null,
-          "Policy Status": policy ? policy["Policy Status"] : null,
-          "Monthly Premium": policy ? policy["Monthly Premium"] : null,
-          Flow: lead.flow || null,
-          "FF financial_dependents": lead.financial_dependents || null,
-          "FF life_biggest_concern": lead.life_biggest_concern || null,
-          "FF income_savings": lead.income_savings || null,
-          "FF critical_illness_concern": lead.critical_illness_concern || null,
-          "FF existing_cover_in_place": lead.existing_cover_in_place || null,
-          "FF existing_cover_what_changed":
+          // Build output object (same as before)
+          const out = {
+            "User's Name": lead.display_name || lead.name || null,
+            "User's Email": lead.user_email || lead.email || null,
+            "Phone Number": lead.phone_number || null,
+            "Exercise/ Fitness Info": getExerciseFitnessInfo(lead),
+            "UTM Source": lead.utm_params?.utm_source || null,
+            "UTM Medium": lead.utm_params?.utm_medium || null,
+            "UTM campaign": lead.utm_params?.utm_campaign || null,
+            "FB- campaign id": lead.meta_ids?.campaign_id || null,
+            "FB - Ad id": lead.meta_ids?.ad_id || null,
+            "FB- adset id": lead.meta_ids?.adset_id || null,
+            "Partner Allocated": partnerAllocated,
+            "Status": lead.status || null,
+            "Status open": lead.modified_open ?
+            lead.modified_open.toDate().toISOString() :
+            null,
+            "Status- call booked": lead.modified_first_call_scheduled ?
+            lead.modified_first_call_scheduled.toDate().toISOString() :
+            null,
+            "Status - call attended": lead.modified_first_call_attended ?
+            lead.modified_first_call_attended.toDate().toISOString() :
+            null,
+            "Gp referral": lead.modified_gp_referral ?
+            lead.modified_gp_referral.toDate().toISOString() :
+            null,
+            "Purchased": lead.modified_purchased ?
+            lead.modified_purchased.toDate().toISOString() :
+            null,
+            "Closed": lead.modified_closed ?
+            lead.modified_closed.toDate().toISOString() :
+            null,
+            "Policy ID": policy ? policy["Policy ID"] : null,
+            "Starting Date": policy ? policy["Starting Date"] : null,
+            "Ending Date": policy ? policy["Ending Date"] : null,
+            "Policy Status": policy ? policy["Policy Status"] : null,
+            "Monthly Premium": policy ? policy["Monthly Premium"] : null,
+            "Flow": lead.flow || null,
+            "FF financial_dependents": lead.financial_dependents || null,
+            "FF life_biggest_concern": lead.life_biggest_concern || null,
+            "FF income_savings": lead.income_savings || null,
+            "FF critical_illness_concern": lead.critical_illness_concern || null,
+            "FF existing_cover_in_place": lead.existing_cover_in_place || null,
+            "FF existing_cover_what_changed":
             lead.existing_cover_what_changed || null,
-        };
+          };
 
-        return out;
-      });
+          return out;
+        });
 
-      const results = await Promise.all(leadPromises);
+        const results = await Promise.all(leadPromises);
 
-      // ✅ Convert the JSON array to a string so Bubble sees it as text
-      return res.send(JSON.stringify(results));
-    } catch (error) {
-      console.error("getAllLeadsForCsv error:", error);
-      return res.status(500).send(JSON.stringify({ error: error.message }));
-    }
-  },
+        // ✅ Convert the JSON array to a string so Bubble sees it as text
+        return res.send(JSON.stringify(results));
+      } catch (error) {
+        console.error("getAllLeadsForCsv error:", error);
+        return res.status(500).send(JSON.stringify({error: error.message}));
+      }
+    },
 );
 
 // exports.garminStartNew = onRequest(
@@ -2946,510 +2946,510 @@ exports.getAllLeadsForCsv = onRequest(
 // );
 
 exports.garminStartNew = onRequest(
-  { cors: true, region: "europe-west2", secrets: [CLIENT_ID] },
-  async (req, res) => {
-    try {
-      console.log("garminStart called with query:", req.query);
+    {cors: true, region: "europe-west2", secrets: [CLIENT_ID]},
+    async (req, res) => {
+      try {
+        console.log("garminStart called with query:", req.query);
 
-      const appRedirectUri = req.query.redirect_uri;
-      const userRefPath = req.query.userRef;
+        const appRedirectUri = req.query.redirect_uri;
+        const userRefPath = req.query.userRef;
 
-      if (!appRedirectUri || !userRefPath) {
-        return res.status(400).send("Missing required parameters");
-      }
+        if (!appRedirectUri || !userRefPath) {
+          return res.status(400).send("Missing required parameters");
+        }
 
-      const userRef = admin.firestore().doc(userRefPath);
+        const userRef = admin.firestore().doc(userRefPath);
 
-      // Generate PKCE values
-      const state = generateRandomString(32);
-      const codeVerifier = generateRandomString(64);
-      const codeChallenge = generateCodeChallenge(codeVerifier);
+        // Generate PKCE values
+        const state = generateRandomString(32);
+        const codeVerifier = generateRandomString(64);
+        const codeChallenge = generateCodeChallenge(codeVerifier);
 
-      // Save OAuth state ONLY (no batch yet)
-      await admin.firestore().collection("garminOauthStates").doc(state).set({
-        appRedirectUri,
-        codeVerifier,
-        userRefPath: userRef.path,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+        // Save OAuth state ONLY (no batch yet)
+        await admin.firestore().collection("garminOauthStates").doc(state).set({
+          appRedirectUri,
+          codeVerifier,
+          userRefPath: userRef.path,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
 
-      const authUrl =
+        const authUrl =
         `https://connect.garmin.com/oauth2Confirm?` +
         `response_type=code&` +
         `client_id=${CLIENT_ID.value()}&` +
         `code_challenge=${codeChallenge}&` +
         `code_challenge_method=S256&` +
         `redirect_uri=${encodeURIComponent(
-          "https://garmincallbacknew-yoyi2vtgca-nw.a.run.app",
+            "https://garmincallbacknew-yoyi2vtgca-nw.a.run.app",
         )}&` +
         `state=${state}`;
 
-      console.log("Redirecting to Garmin auth URL:", authUrl);
-      return res.redirect(authUrl);
-    } catch (err) {
-      console.error("Error in garminStart:", err);
-      return res.status(500).send("Failed to start Garmin OAuth");
-    }
-  },
+        console.log("Redirecting to Garmin auth URL:", authUrl);
+        return res.redirect(authUrl);
+      } catch (err) {
+        console.error("Error in garminStart:", err);
+        return res.status(500).send("Failed to start Garmin OAuth");
+      }
+    },
 );
 
 exports.garminCallbackNew = onRequest(
-  { cors: true, region: "europe-west2", secrets: [CLIENT_ID, CLIENT_SECRET] },
-  async (req, res) => {
-    const DEFAULT_APP_REDIRECT = "athlete://athlete.com/GarminConnect";
+    {cors: true, region: "europe-west2", secrets: [CLIENT_ID, CLIENT_SECRET]},
+    async (req, res) => {
+      const DEFAULT_APP_REDIRECT = "athlete://athlete.com/GarminConnect";
 
-    try {
-      console.log("garminCallback called with query:", req.query);
-      const { code, state, error } = req.query;
-
-      if (!state) {
-        return res.redirect(
-          `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid OAuth state")}`,
-        );
-      }
-
-      const docRef = admin
-        .firestore()
-        .collection("garminOauthStates")
-        .doc(state);
-      const doc = await docRef.get();
-
-      if (!doc.exists) {
-        return res.redirect(
-          `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid OAuth session")}`,
-        );
-      }
-
-      const { codeVerifier, appRedirectUri, userRefPath } = doc.data();
-      const userRef = admin.firestore().doc(userRefPath);
-
-      if (error) {
-        await docRef.delete();
-        return res.redirect(
-          `${appRedirectUri}?error=${encodeURIComponent("Access Denied")}`,
-        );
-      }
-
-      if (!code) {
-        return res.redirect(
-          `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid authorization code")}`,
-        );
-      }
-
-      // Exchange token
-      const tokenRes = await axios.post(
-        "https://diauth.garmin.com/di-oauth2-service/oauth/token",
-        new URLSearchParams({
-          grant_type: "authorization_code",
-          code,
-          redirect_uri: "https://garmincallbacknew-yoyi2vtgca-nw.a.run.app",
-          code_verifier: codeVerifier,
-        }),
-        {
-          auth: {
-            username: CLIENT_ID.value(),
-            password: CLIENT_SECRET.value(),
-          },
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        },
-      );
-
-      const { access_token, refresh_token, expires_in } = tokenRes.data;
-
-      // Get Garmin user ID
-      let garminUserId = null;
       try {
-        const idRes = await axios.get(
-          "https://apis.garmin.com/wellness-api/rest/user/id",
-          { headers: { Authorization: `Bearer ${access_token}` } },
+        console.log("garminCallback called with query:", req.query);
+        const {code, state, error} = req.query;
+
+        if (!state) {
+          return res.redirect(
+              `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid OAuth state")}`,
+          );
+        }
+
+        const docRef = admin
+            .firestore()
+            .collection("garminOauthStates")
+            .doc(state);
+        const doc = await docRef.get();
+
+        if (!doc.exists) {
+          return res.redirect(
+              `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid OAuth session")}`,
+          );
+        }
+
+        const {codeVerifier, appRedirectUri, userRefPath} = doc.data();
+        const userRef = admin.firestore().doc(userRefPath);
+
+        if (error) {
+          await docRef.delete();
+          return res.redirect(
+              `${appRedirectUri}?error=${encodeURIComponent("Access Denied")}`,
+          );
+        }
+
+        if (!code) {
+          return res.redirect(
+              `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid authorization code")}`,
+          );
+        }
+
+        // Exchange token
+        const tokenRes = await axios.post(
+            "https://diauth.garmin.com/di-oauth2-service/oauth/token",
+            new URLSearchParams({
+              grant_type: "authorization_code",
+              code,
+              redirect_uri: "https://garmincallbacknew-yoyi2vtgca-nw.a.run.app",
+              code_verifier: codeVerifier,
+            }),
+            {
+              auth: {
+                username: CLIENT_ID.value(),
+                password: CLIENT_SECRET.value(),
+              },
+              headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            },
         );
-        garminUserId = idRes.data.userId;
-      } catch (e) {
-        console.warn("Garmin userId not ready yet");
-      }
 
-      const tokenExpiry = admin.firestore.Timestamp.fromDate(
-        new Date(Date.now() + expires_in * 1000),
-      );
+        const {access_token, refresh_token, expires_in} = tokenRes.data;
 
-      await userRef.update({
-        garminUserId,
-        access_token,
-        refresh_token,
-        token_expiry: tokenExpiry,
-      });
+        // Get Garmin user ID
+        let garminUserId = null;
+        try {
+          const idRes = await axios.get(
+              "https://apis.garmin.com/wellness-api/rest/user/id",
+              {headers: {Authorization: `Bearer ${access_token}`}},
+          );
+          garminUserId = idRes.data.userId;
+        } catch (e) {
+          console.warn("Garmin userId not ready yet");
+        }
 
-      await new Promise((resolve) => setTimeout(resolve, 3000)); // 2 seconds
+        const tokenExpiry = admin.firestore.Timestamp.fromDate(
+            new Date(Date.now() + expires_in * 1000),
+        );
 
-      // Check permissions
-      const permissionsRes = await axios.get(
-        "https://apis.garmin.com/wellness-api/rest/user/permissions",
-        { headers: { Authorization: `Bearer ${access_token}` } },
-      );
-
-      const grantedPermissions = permissionsRes.data.permissions || [];
-
-      if (!grantedPermissions.includes("HISTORICAL_DATA_EXPORT")) {
         await userRef.update({
-          garminUserId: admin.firestore.FieldValue.delete(),
-          access_token: admin.firestore.FieldValue.delete(),
-          refresh_token: admin.firestore.FieldValue.delete(),
+          garminUserId,
+          access_token,
+          refresh_token,
+          token_expiry: tokenExpiry,
         });
 
+        await new Promise((resolve) => setTimeout(resolve, 3000)); // 2 seconds
+
+        // Check permissions
+        const permissionsRes = await axios.get(
+            "https://apis.garmin.com/wellness-api/rest/user/permissions",
+            {headers: {Authorization: `Bearer ${access_token}`}},
+        );
+
+        const grantedPermissions = permissionsRes.data.permissions || [];
+
+        if (!grantedPermissions.includes("HISTORICAL_DATA_EXPORT")) {
+          await userRef.update({
+            garminUserId: admin.firestore.FieldValue.delete(),
+            access_token: admin.firestore.FieldValue.delete(),
+            refresh_token: admin.firestore.FieldValue.delete(),
+          });
+
+          await docRef.delete();
+
+          return res.redirect(
+              `${appRedirectUri}?error=${encodeURIComponent(
+                  "Missing Historical Data Permission",
+              )}`,
+          );
+        }
+
+        // 🔥 ONLY NOW create batch
+        const batchRef = admin.firestore().collection("garminSyncBatches").doc();
+
+        await batchRef.set({
+          userId: userRef,
+          garminUserId,
+          status: "processing",
+          totalActivities: 0,
+          processedActivities: 0,
+          created_at: admin.firestore.FieldValue.serverTimestamp(),
+          updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Request backfill FIRST
+        const nowSec = Math.floor(Date.now() / 1000);
+        const sevenDaysAgoSec = nowSec - 7 * 24 * 60 * 60;
+
+        await axios.get(
+            "https://apis.garmin.com/wellness-api/rest/backfill/activities",
+            {
+              params: {
+                userId: garminUserId,
+                summaryStartTimeInSeconds: sevenDaysAgoSec,
+                summaryEndTimeInSeconds: nowSec,
+              },
+              headers: {Authorization: `Bearer ${access_token}`},
+            },
+        );
+
         await docRef.delete();
 
+        return res.redirect(`${appRedirectUri}?batchId=${batchRef.id}`);
+      } catch (err) {
+        console.error("Garmin OAuth failed:", err.response?.data || err);
         return res.redirect(
-          `${appRedirectUri}?error=${encodeURIComponent(
-            "Missing Historical Data Permission",
-          )}`,
+            `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Connection failed")}`,
         );
       }
-
-      // 🔥 ONLY NOW create batch
-      const batchRef = admin.firestore().collection("garminSyncBatches").doc();
-
-      await batchRef.set({
-        userId: userRef,
-        garminUserId,
-        status: "processing",
-        totalActivities: 0,
-        processedActivities: 0,
-        created_at: admin.firestore.FieldValue.serverTimestamp(),
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      // Request backfill FIRST
-      const nowSec = Math.floor(Date.now() / 1000);
-      const sevenDaysAgoSec = nowSec - 7 * 24 * 60 * 60;
-
-      await axios.get(
-        "https://apis.garmin.com/wellness-api/rest/backfill/activities",
-        {
-          params: {
-            userId: garminUserId,
-            summaryStartTimeInSeconds: sevenDaysAgoSec,
-            summaryEndTimeInSeconds: nowSec,
-          },
-          headers: { Authorization: `Bearer ${access_token}` },
-        },
-      );
-
-      await docRef.delete();
-
-      return res.redirect(`${appRedirectUri}?batchId=${batchRef.id}`);
-    } catch (err) {
-      console.error("Garmin OAuth failed:", err.response?.data || err);
-      return res.redirect(
-        `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Connection failed")}`,
-      );
-    }
-  },
+    },
 );
 
 exports.garminWebhook = onRequest(
-  { cors: true, region: "europe-west2", timeoutSeconds: 540, memory: "512MiB" },
-  async (req, res) => {
-    try {
-      console.log("✅ Garmin webhook received");
-      console.log("📦 Request body:", JSON.stringify(req.body, null, 2));
+    {cors: true, region: "europe-west2", timeoutSeconds: 540, memory: "512MiB"},
+    async (req, res) => {
+      try {
+        console.log("✅ Garmin webhook received");
+        console.log("📦 Request body:", JSON.stringify(req.body, null, 2));
 
-      const db = admin.firestore();
-      const activityFiles = req.body.activityFiles || [];
-      const userChanges = req.body.userPermissionsChange || [];
+        const db = admin.firestore();
+        const activityFiles = req.body.activityFiles || [];
+        const userChanges = req.body.userPermissionsChange || [];
 
-      if (!activityFiles.length) {
-        console.log("ℹ️ No activity files received");
+        if (!activityFiles.length) {
+          console.log("ℹ️ No activity files received");
 
-        for (const change of userChanges) {
-          const garminUserId = change.userId;
+          for (const change of userChanges) {
+            const garminUserId = change.userId;
 
-          // Find user
-          const userSnap = await admin
-            .firestore()
-            .collection("users")
-            .where("garminUserId", "==", garminUserId)
-            .limit(1)
-            .get();
+            // Find user
+            const userSnap = await admin
+                .firestore()
+                .collection("users")
+                .where("garminUserId", "==", garminUserId)
+                .limit(1)
+                .get();
 
-          if (userSnap.empty) {
-            console.warn(`⚠️ No user found for ${garminUserId}`);
-            continue;
-          }
+            if (userSnap.empty) {
+              console.warn(`⚠️ No user found for ${garminUserId}`);
+              continue;
+            }
 
-          const userRef = userSnap.docs[0].ref;
-          const userData = userSnap.docs[0].data();
-          const accessToken = userData.access_token;
+            const userRef = userSnap.docs[0].ref;
+            const userData = userSnap.docs[0].data();
+            const accessToken = userData.access_token;
 
-          // Find processing batch
-          const batchSnap = await admin
-            .firestore()
-            .collection("garminSyncBatches")
-            .where("userId", "==", userRef)
-            .where("status", "==", "processing")
-            .limit(1)
-            .get();
+            // Find processing batch
+            const batchSnap = await admin
+                .firestore()
+                .collection("garminSyncBatches")
+                .where("userId", "==", userRef)
+                .where("status", "==", "processing")
+                .limit(1)
+                .get();
 
-          if (batchSnap.empty) {
-            console.warn(`⚠️ No processing batch found for ${garminUserId}`);
-            continue;
-          }
+            if (batchSnap.empty) {
+              console.warn(`⚠️ No processing batch found for ${garminUserId}`);
+              continue;
+            }
 
-          const batchRef = batchSnap.docs[0].ref;
-          console.log(`✅ Found batch ${batchRef.id} with no activities`);
+            const batchRef = batchSnap.docs[0].ref;
+            console.log(`✅ Found batch ${batchRef.id} with no activities`);
 
-          // Deregister from Garmin
-          if (accessToken) {
-            try {
-              await axios.delete(
-                "https://apis.garmin.com/wellness-api/rest/user/registration",
-                {
-                  headers: { Authorization: `Bearer ${accessToken}` },
-                },
+            // Deregister from Garmin
+            if (accessToken) {
+              try {
+                await axios.delete(
+                    "https://apis.garmin.com/wellness-api/rest/user/registration",
+                    {
+                      headers: {Authorization: `Bearer ${accessToken}`},
+                    },
+                );
+                console.log(`✅ Deregistered user ${garminUserId} from Garmin`);
+              } catch (err) {
+                console.warn(
+                    "Failed to deregister from Garmin:",
+                    err.response?.data || err.message,
+                );
+              }
+            }
+
+            // Clear Garmin data from user document
+            await userRef.update({
+              access_token: admin.firestore.FieldValue.delete(),
+              refresh_token: admin.firestore.FieldValue.delete(),
+              garminUserId: admin.firestore.FieldValue.delete(),
+            });
+
+            console.log(`✅ Cleared Garmin data from user`);
+
+            // Mark batch as error
+            await batchRef.update({
+              status: "error",
+              processedActivities: 0,
+              errorMessage:
+              "No cycling or running activities found in your Garmin account",
+              completedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+
+            console.log(`✅ Batch ${batchRef.id} marked as error`);
+
+            // Delete activities subcollection (should be empty anyway)
+            const activitiesSnap = await batchRef.collection("activities").get();
+            if (!activitiesSnap.empty) {
+              await Promise.all(
+                  activitiesSnap.docs.map((doc) => doc.ref.delete()),
               );
-              console.log(`✅ Deregistered user ${garminUserId} from Garmin`);
-            } catch (err) {
-              console.warn(
-                "Failed to deregister from Garmin:",
-                err.response?.data || err.message,
-              );
+              console.log(`🗑️ Deleted ${activitiesSnap.size} activities`);
             }
           }
 
-          // Clear Garmin data from user document
-          await userRef.update({
-            access_token: admin.firestore.FieldValue.delete(),
-            refresh_token: admin.firestore.FieldValue.delete(),
-            garminUserId: admin.firestore.FieldValue.delete(),
-          });
+          return res.status(200).json({success: true});
+        }
 
-          console.log(`✅ Cleared Garmin data from user`);
+        // Log all incoming activity IDs and userIds
+        console.log(
+            "Incoming activities:",
+            activityFiles.map((a) => ({
+              activityId: a.activityId,
+              userId: a.userId,
+              activityType: a.activityType,
+            })),
+        );
 
-          // Mark batch as error
+        // Allowed activity types
+        const ALLOWED_ACTIVITY_TYPES = [
+          "cycling",
+          "running",
+          "road_biking",
+          "mountain_biking",
+          "virtual_ride",
+          "virtual_run",
+          "indoor_cycling",
+          "track_running",
+          "trail_running",
+          "cycle",
+          "bike",
+          "run",
+        ];
+
+        // Group activities by Garmin user ID
+        const activitiesByUser = {};
+        for (const activity of activityFiles) {
+          const activityType = (activity.activityType || "").toLowerCase();
+
+          if (!ALLOWED_ACTIVITY_TYPES.includes(activityType)) {
+            console.log(`⏭️ Skipping activity type: ${activityType}`);
+            continue;
+          }
+
+          const garminUserId = activity.userId; // This MUST match garminUserId in Firestore
+          if (!activitiesByUser[garminUserId]) {
+            activitiesByUser[garminUserId] = [];
+          }
+          activitiesByUser[garminUserId].push(activity);
+        }
+
+        console.log(
+            `👥 Processing activities for ${Object.keys(activitiesByUser).length} users`,
+        );
+
+        for (const [garminUserId, userActivities] of Object.entries(
+            activitiesByUser,
+        )) {
+          console.log(
+              `\n👤 Processing ${userActivities.length} activities for Garmin user: ${garminUserId}`,
+          );
+
+          // Find user by garminUserId
+          const userSnap = await db
+              .collection("users")
+              .where("garminUserId", "==", garminUserId)
+              .limit(1)
+              .get();
+
+          if (userSnap.empty) {
+            console.log(`❌ No user found for Garmin userId: ${garminUserId}`);
+            continue;
+          }
+
+          const userDoc = userSnap.docs[0];
+          const user = userDoc.data();
+          const userRef = userDoc.ref;
+
+          // Ensure we have a valid access token (refresh if needed)
+          const accessToken = user.access_token;
+          if (!accessToken) {
+            console.error(`❌ Missing access token for user ${garminUserId}`);
+            continue;
+          }
+
+          // Find or create batch
+          const batchSnap = await db
+              .collection("garminSyncBatches")
+              .where("userId", "==", userRef)
+              .where("status", "==", "processing")
+              .limit(1)
+              .get();
+
+          let batchRef;
+          if (!batchSnap.empty) {
+            batchRef = batchSnap.docs[0].ref;
+            await batchRef.update({
+              totalActivities: userActivities.length,
+              updated_at: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            console.log(`⚠️ Using existing batch: ${batchRef.id}`);
+          } else {
+            batchRef = db.collection("garminSyncBatches").doc();
+            await batchRef.set({
+              userId: userRef,
+              garminUserId,
+              status: "processing",
+              totalActivities: userActivities.length,
+              processedActivities: 0,
+              created_at: admin.firestore.FieldValue.serverTimestamp(),
+              updated_at: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            console.log(`📦 Created new batch: ${batchRef.id}`);
+          }
+
+          let processedCount = 0;
+          const hasError = false;
+          const errorMessage = null;
+
+          // Process each activity
+          for (const activity of userActivities) {
+            try {
+              const response = await axios.get(activity.callbackURL, {
+                responseType: "arraybuffer",
+                headers: {Authorization: `Bearer ${user.access_token}`},
+              });
+
+              const fitBuffer = Buffer.from(response.data);
+              const parsedData = await parseFitFile(fitBuffer);
+
+              const activityDocRef = batchRef
+                  .collection("activities")
+                  .doc(String(activity.activityId));
+
+              await activityDocRef.set({
+                created_at: admin.firestore.FieldValue.serverTimestamp(),
+                activityDate: parsedData.activityDate ?
+                admin.firestore.Timestamp.fromDate(parsedData.activityDate) :
+                null,
+                userId: userRef,
+                garminUserId: garminUserId,
+                activityId: activity.activityId,
+                activityName: activity.activityName,
+                activityType: activity.activityType,
+                distance: parsedData.distance || 0,
+                distanceKm: parseFloat(
+                    ((parsedData.distance || 0) / 1000).toFixed(2),
+                ),
+                totalTime: parsedData.totalTime || 0,
+                deviceName: activity.deviceName,
+                avgPower: parsedData.avgPower || 0,
+                maxPower: parsedData.maxPower || 0,
+                avgHr: parsedData.avgHr || 0,
+                maxHr: parsedData.maxHr || 0,
+                batchId: batchRef.id,
+                error: null, // Add error field
+              });
+
+              processedCount++;
+              if (
+                processedCount % 5 === 0 ||
+              processedCount === userActivities.length
+              ) {
+                await batchRef.update({
+                  processedActivities: processedCount,
+                  updated_at: admin.firestore.FieldValue.serverTimestamp(), // 👈 Keep updating this
+                });
+              }
+
+              console.log(
+                  `✅ Activity saved (${processedCount}/${userActivities.length})`,
+              );
+            } catch (err) {
+              console.error(
+                  `⚠️ Failed to process activity ${activity.activityId}:`,
+                  err.message,
+              );
+              // Log the error per activity but don't break
+              const errorDocRef = batchRef
+                  .collection("activities")
+                  .doc(String(activity.activityId));
+              await errorDocRef.set({
+                userId: userRef,
+                garminUserId: garminUserId,
+                activityId: activity.activityId,
+                error: err.message,
+                batchId: batchRef.id,
+                created_at: admin.firestore.FieldValue.serverTimestamp(),
+              });
+            }
+          }
+
           await batchRef.update({
-            status: "error",
-            processedActivities: 0,
-            errorMessage:
-              "No cycling or running activities found in your Garmin account",
+            status: hasError ? "error" : "success",
+            processedActivities: processedCount,
+            errorMessage,
             completedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
 
-          console.log(`✅ Batch ${batchRef.id} marked as error`);
-
-          // Delete activities subcollection (should be empty anyway)
-          const activitiesSnap = await batchRef.collection("activities").get();
-          if (!activitiesSnap.empty) {
-            await Promise.all(
-              activitiesSnap.docs.map((doc) => doc.ref.delete()),
-            );
-            console.log(`🗑️ Deleted ${activitiesSnap.size} activities`);
-          }
+          console.log(
+              `✅ Batch ${batchRef.id} completed: ${hasError ? "error" : "success"}`,
+          );
         }
 
-        return res.status(200).json({ success: true });
+        res.status(200).json({success: true, message: "Activities processed"});
+      } catch (err) {
+        console.error("❌ Garmin webhook error:", err);
+        res.status(500).json({success: false, error: err.message});
       }
-
-      // Log all incoming activity IDs and userIds
-      console.log(
-        "Incoming activities:",
-        activityFiles.map((a) => ({
-          activityId: a.activityId,
-          userId: a.userId,
-          activityType: a.activityType,
-        })),
-      );
-
-      // Allowed activity types
-      const ALLOWED_ACTIVITY_TYPES = [
-        "cycling",
-        "running",
-        "road_biking",
-        "mountain_biking",
-        "virtual_ride",
-        "virtual_run",
-        "indoor_cycling",
-        "track_running",
-        "trail_running",
-        "cycle",
-        "bike",
-        "run",
-      ];
-
-      // Group activities by Garmin user ID
-      const activitiesByUser = {};
-      for (const activity of activityFiles) {
-        const activityType = (activity.activityType || "").toLowerCase();
-
-        if (!ALLOWED_ACTIVITY_TYPES.includes(activityType)) {
-          console.log(`⏭️ Skipping activity type: ${activityType}`);
-          continue;
-        }
-
-        const garminUserId = activity.userId; // This MUST match garminUserId in Firestore
-        if (!activitiesByUser[garminUserId]) {
-          activitiesByUser[garminUserId] = [];
-        }
-        activitiesByUser[garminUserId].push(activity);
-      }
-
-      console.log(
-        `👥 Processing activities for ${Object.keys(activitiesByUser).length} users`,
-      );
-
-      for (const [garminUserId, userActivities] of Object.entries(
-        activitiesByUser,
-      )) {
-        console.log(
-          `\n👤 Processing ${userActivities.length} activities for Garmin user: ${garminUserId}`,
-        );
-
-        // Find user by garminUserId
-        const userSnap = await db
-          .collection("users")
-          .where("garminUserId", "==", garminUserId)
-          .limit(1)
-          .get();
-
-        if (userSnap.empty) {
-          console.log(`❌ No user found for Garmin userId: ${garminUserId}`);
-          continue;
-        }
-
-        const userDoc = userSnap.docs[0];
-        const user = userDoc.data();
-        const userRef = userDoc.ref;
-
-        // Ensure we have a valid access token (refresh if needed)
-        const accessToken = user.access_token;
-        if (!accessToken) {
-          console.error(`❌ Missing access token for user ${garminUserId}`);
-          continue;
-        }
-
-        // Find or create batch
-        const batchSnap = await db
-          .collection("garminSyncBatches")
-          .where("userId", "==", userRef)
-          .where("status", "==", "processing")
-          .limit(1)
-          .get();
-
-        let batchRef;
-        if (!batchSnap.empty) {
-          batchRef = batchSnap.docs[0].ref;
-          await batchRef.update({
-            totalActivities: userActivities.length,
-            updated_at: admin.firestore.FieldValue.serverTimestamp(),
-          });
-          console.log(`⚠️ Using existing batch: ${batchRef.id}`);
-        } else {
-          batchRef = db.collection("garminSyncBatches").doc();
-          await batchRef.set({
-            userId: userRef,
-            garminUserId,
-            status: "processing",
-            totalActivities: userActivities.length,
-            processedActivities: 0,
-            created_at: admin.firestore.FieldValue.serverTimestamp(),
-            updated_at: admin.firestore.FieldValue.serverTimestamp(),
-          });
-          console.log(`📦 Created new batch: ${batchRef.id}`);
-        }
-
-        let processedCount = 0;
-        const hasError = false;
-        const errorMessage = null;
-
-        // Process each activity
-        for (const activity of userActivities) {
-          try {
-            const response = await axios.get(activity.callbackURL, {
-              responseType: "arraybuffer",
-              headers: { Authorization: `Bearer ${user.access_token}` },
-            });
-
-            const fitBuffer = Buffer.from(response.data);
-            const parsedData = await parseFitFile(fitBuffer);
-
-            const activityDocRef = batchRef
-              .collection("activities")
-              .doc(String(activity.activityId));
-
-            await activityDocRef.set({
-              created_at: admin.firestore.FieldValue.serverTimestamp(),
-              activityDate: parsedData.activityDate
-                ? admin.firestore.Timestamp.fromDate(parsedData.activityDate)
-                : null,
-              userId: userRef,
-              garminUserId: garminUserId,
-              activityId: activity.activityId,
-              activityName: activity.activityName,
-              activityType: activity.activityType,
-              distance: parsedData.distance || 0,
-              distanceKm: parseFloat(
-                ((parsedData.distance || 0) / 1000).toFixed(2),
-              ),
-              totalTime: parsedData.totalTime || 0,
-              deviceName: activity.deviceName,
-              avgPower: parsedData.avgPower || 0,
-              maxPower: parsedData.maxPower || 0,
-              avgHr: parsedData.avgHr || 0,
-              maxHr: parsedData.maxHr || 0,
-              batchId: batchRef.id,
-              error: null, // Add error field
-            });
-
-            processedCount++;
-            if (
-              processedCount % 5 === 0 ||
-              processedCount === userActivities.length
-            ) {
-              await batchRef.update({
-                processedActivities: processedCount,
-                updated_at: admin.firestore.FieldValue.serverTimestamp(), // 👈 Keep updating this
-              });
-            }
-
-            console.log(
-              `✅ Activity saved (${processedCount}/${userActivities.length})`,
-            );
-          } catch (err) {
-            console.error(
-              `⚠️ Failed to process activity ${activity.activityId}:`,
-              err.message,
-            );
-            // Log the error per activity but don't break
-            const errorDocRef = batchRef
-              .collection("activities")
-              .doc(String(activity.activityId));
-            await errorDocRef.set({
-              userId: userRef,
-              garminUserId: garminUserId,
-              activityId: activity.activityId,
-              error: err.message,
-              batchId: batchRef.id,
-              created_at: admin.firestore.FieldValue.serverTimestamp(),
-            });
-          }
-        }
-
-        await batchRef.update({
-          status: hasError ? "error" : "success",
-          processedActivities: processedCount,
-          errorMessage,
-          completedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        console.log(
-          `✅ Batch ${batchRef.id} completed: ${hasError ? "error" : "success"}`,
-        );
-      }
-
-      res.status(200).json({ success: true, message: "Activities processed" });
-    } catch (err) {
-      console.error("❌ Garmin webhook error:", err);
-      res.status(500).json({ success: false, error: err.message });
-    }
-  },
+    },
 );
 
 // exports.garminWebhook = onRequest(
@@ -3759,154 +3759,154 @@ exports.garminWebhook = onRequest(
 // );
 
 exports.garminUserUpdate = onRequest(
-  { cors: true, region: "europe-west2", timeoutSeconds: 300, memory: "256MiB" },
-  async (req, res) => {
-    try {
-      console.log("✅ Garmin user update webhook received");
-      console.log("📦 Request body:", JSON.stringify(req.body, null, 2));
+    {cors: true, region: "europe-west2", timeoutSeconds: 300, memory: "256MiB"},
+    async (req, res) => {
+      try {
+        console.log("✅ Garmin user update webhook received");
+        console.log("📦 Request body:", JSON.stringify(req.body, null, 2));
 
-      const db = admin.firestore();
-      const userChanges = req.body.userPermissionsChange || [];
-      const deregistrations = req.body.userDeregistrations || [];
+        const db = admin.firestore();
+        const userChanges = req.body.userPermissionsChange || [];
+        const deregistrations = req.body.userDeregistrations || [];
 
-      // Handle user permission changes
-      if (userChanges.length) {
-        console.log(`ℹ️ Processing ${userChanges.length} permission changes`);
-        for (const change of userChanges) {
-          const garminUserId = change.userId;
-          const permissions = change.permissions || [];
+        // Handle user permission changes
+        if (userChanges.length) {
+          console.log(`ℹ️ Processing ${userChanges.length} permission changes`);
+          for (const change of userChanges) {
+            const garminUserId = change.userId;
+            const permissions = change.permissions || [];
 
-          // Find Firestore user by garminUserId
-          const userSnap = await db
-            .collection("users")
-            .where("garminUserId", "==", garminUserId)
-            .limit(1)
-            .get();
+            // Find Firestore user by garminUserId
+            const userSnap = await db
+                .collection("users")
+                .where("garminUserId", "==", garminUserId)
+                .limit(1)
+                .get();
 
-          if (userSnap.empty) {
-            console.warn(`⚠️ No user found for Garmin userId: ${garminUserId}`);
-            continue;
-          }
+            if (userSnap.empty) {
+              console.warn(`⚠️ No user found for Garmin userId: ${garminUserId}`);
+              continue;
+            }
 
-          const userRef = userSnap.docs[0].ref;
+            const userRef = userSnap.docs[0].ref;
 
-          // Update user document with new permissions
-          await userRef.update({
-            grantedGarminPermissions: permissions,
-            lastGarminPermissionsChange:
+            // Update user document with new permissions
+            await userRef.update({
+              grantedGarminPermissions: permissions,
+              lastGarminPermissionsChange:
               admin.firestore.FieldValue.serverTimestamp(),
-          });
+            });
 
-          console.log(
-            `✅ Updated permissions for user ${garminUserId}:`,
-            permissions,
-          );
-        }
-      }
-
-      // Handle user deregistrations
-      if (deregistrations.length) {
-        console.log(`ℹ️ Processing ${deregistrations.length} deregistrations`);
-        for (const dereg of deregistrations) {
-          const garminUserId = dereg.userId;
-
-          // Find Firestore user
-          const userSnap = await db
-            .collection("users")
-            .where("garminUserId", "==", garminUserId)
-            .limit(1)
-            .get();
-
-          if (userSnap.empty) {
-            console.warn(`⚠️ No user found for Garmin userId: ${garminUserId}`);
-            continue;
-          }
-
-          const userRef = userSnap.docs[0].ref;
-
-          // Delete all batches & activities
-          const batchSnap = await db
-            .collection("garminSyncBatches")
-            .where("userId", "==", userRef)
-            .get();
-
-          for (const batchDoc of batchSnap.docs) {
-            const batchRef = batchDoc.ref;
-            const activitiesSnap = await batchRef
-              .collection("activities")
-              .get();
-
-            await Promise.all(
-              activitiesSnap.docs.map((doc) => doc.ref.delete()),
+            console.log(
+                `✅ Updated permissions for user ${garminUserId}:`,
+                permissions,
             );
-
-            await batchRef.delete();
-            console.log(`🗑️ Deleted batch ${batchRef.id} and its activities`);
           }
-
-          // Remove Garmin connection from user
-          await userRef.update({
-            garminUserId: admin.firestore.FieldValue.delete(),
-            access_token: admin.firestore.FieldValue.delete(),
-            refresh_token: admin.firestore.FieldValue.delete(),
-            grantedGarminPermissions: admin.firestore.FieldValue.delete(),
-          });
-
-          console.log(`❌ User ${garminUserId} deregistered and cleaned up`);
         }
-      }
 
-      res
-        .status(200)
-        .json({ success: true, message: "User updates processed" });
-    } catch (err) {
-      console.error("❌ Error processing Garmin user update:", err);
-      res.status(500).json({ success: false, error: err.message });
-    }
-  },
+        // Handle user deregistrations
+        if (deregistrations.length) {
+          console.log(`ℹ️ Processing ${deregistrations.length} deregistrations`);
+          for (const dereg of deregistrations) {
+            const garminUserId = dereg.userId;
+
+            // Find Firestore user
+            const userSnap = await db
+                .collection("users")
+                .where("garminUserId", "==", garminUserId)
+                .limit(1)
+                .get();
+
+            if (userSnap.empty) {
+              console.warn(`⚠️ No user found for Garmin userId: ${garminUserId}`);
+              continue;
+            }
+
+            const userRef = userSnap.docs[0].ref;
+
+            // Delete all batches & activities
+            const batchSnap = await db
+                .collection("garminSyncBatches")
+                .where("userId", "==", userRef)
+                .get();
+
+            for (const batchDoc of batchSnap.docs) {
+              const batchRef = batchDoc.ref;
+              const activitiesSnap = await batchRef
+                  .collection("activities")
+                  .get();
+
+              await Promise.all(
+                  activitiesSnap.docs.map((doc) => doc.ref.delete()),
+              );
+
+              await batchRef.delete();
+              console.log(`🗑️ Deleted batch ${batchRef.id} and its activities`);
+            }
+
+            // Remove Garmin connection from user
+            await userRef.update({
+              garminUserId: admin.firestore.FieldValue.delete(),
+              access_token: admin.firestore.FieldValue.delete(),
+              refresh_token: admin.firestore.FieldValue.delete(),
+              grantedGarminPermissions: admin.firestore.FieldValue.delete(),
+            });
+
+            console.log(`❌ User ${garminUserId} deregistered and cleaned up`);
+          }
+        }
+
+        res
+            .status(200)
+            .json({success: true, message: "User updates processed"});
+      } catch (err) {
+        console.error("❌ Error processing Garmin user update:", err);
+        res.status(500).json({success: false, error: err.message});
+      }
+    },
 );
 
 // ---------------------- Get Garmin Tokens by Session ----------------------
 exports.getGarminTokens = onRequest(
-  { cors: true, region: "europe-west2" },
-  async (req, res) => {
-    try {
-      const { sessionId } = req.query;
-
-      if (!sessionId) {
-        return res.status(400).send("Missing sessionId");
-      }
-
-      const ref = admin
-        .firestore()
-        .collection("garminOauthSessions")
-        .doc(sessionId);
-
-      const doc = await ref.get();
-      if (!doc.exists) {
-        return res.status(404).send("Session expired or not found");
-      }
-
-      const data = doc.data();
-
-      // Delete session after reading
+    {cors: true, region: "europe-west2"},
+    async (req, res) => {
       try {
-        await ref.delete();
-        console.log("Session deleted:", sessionId);
-      } catch (err) {
-        console.warn("Failed to delete session:", err);
-      }
+        const {sessionId} = req.query;
 
-      res.json({
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken,
-        expiresIn: data.expiresIn,
-      });
-    } catch (err) {
-      console.error("Failed to get Garmin tokens:", err);
-      res.status(500).send("Failed to get Garmin tokens");
-    }
-  },
+        if (!sessionId) {
+          return res.status(400).send("Missing sessionId");
+        }
+
+        const ref = admin
+            .firestore()
+            .collection("garminOauthSessions")
+            .doc(sessionId);
+
+        const doc = await ref.get();
+        if (!doc.exists) {
+          return res.status(404).send("Session expired or not found");
+        }
+
+        const data = doc.data();
+
+        // Delete session after reading
+        try {
+          await ref.delete();
+          console.log("Session deleted:", sessionId);
+        } catch (err) {
+          console.warn("Failed to delete session:", err);
+        }
+
+        res.json({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+          expiresIn: data.expiresIn,
+        });
+      } catch (err) {
+        console.error("Failed to get Garmin tokens:", err);
+        res.status(500).send("Failed to get Garmin tokens");
+      }
+    },
 );
 
 /**
@@ -3914,198 +3914,198 @@ exports.getGarminTokens = onRequest(
  * Runs every 1 minute
  */
 exports.cleanupStaleBatches = onSchedule(
-  {
-    schedule: "*/1 * * * *",
-    region: "europe-west2",
-    timeoutSeconds: 540,
-  },
-  async (event) => {
-    try {
-      console.log("🧹 Starting cleanup of stale batches");
+    {
+      schedule: "*/1 * * * *",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+    },
+    async (event) => {
+      try {
+        console.log("🧹 Starting cleanup of stale batches");
 
-      const db = admin.firestore();
-      const now = admin.firestore.Timestamp.now();
+        const db = admin.firestore();
+        const now = admin.firestore.Timestamp.now();
 
-      const ninetySecondsAgo = admin.firestore.Timestamp.fromMillis(
-        now.toMillis() - 30 * 1000,
-      );
+        const ninetySecondsAgo = admin.firestore.Timestamp.fromMillis(
+            now.toMillis() - 30 * 1000,
+        );
 
-      const staleBatches = await db
-        .collection("garminSyncBatches")
-        .where("status", "==", "processing")
-        .where("created_at", "<=", ninetySecondsAgo)
-        .get();
+        const staleBatches = await db
+            .collection("garminSyncBatches")
+            .where("status", "==", "processing")
+            .where("created_at", "<=", ninetySecondsAgo)
+            .get();
 
-      if (staleBatches.empty) {
-        console.log("ℹ️ No stale batches found");
-        return;
-      }
+        if (staleBatches.empty) {
+          console.log("ℹ️ No stale batches found");
+          return;
+        }
 
-      console.log(`Found ${staleBatches.size} stale batches to check`);
+        console.log(`Found ${staleBatches.size} stale batches to check`);
 
-      for (const batchDoc of staleBatches.docs) {
-        const batchRef = batchDoc.ref;
-        const batchData = batchDoc.data();
+        for (const batchDoc of staleBatches.docs) {
+          const batchRef = batchDoc.ref;
+          const batchData = batchDoc.data();
 
-        console.log(`🔍 Checking batch: ${batchRef.id}`);
+          console.log(`🔍 Checking batch: ${batchRef.id}`);
 
-        try {
-          const activitiesSnap = await batchRef.collection("activities").get();
+          try {
+            const activitiesSnap = await batchRef.collection("activities").get();
 
-          const updatedAt =
+            const updatedAt =
             batchData.updated_at?.toMillis() ||
             batchData.created_at?.toMillis();
-          const thirtySecondsAgo = now.toMillis() - 30 * 1000;
-          const isRecentlyUpdated = updatedAt && updatedAt > thirtySecondsAgo;
+            const thirtySecondsAgo = now.toMillis() - 30 * 1000;
+            const isRecentlyUpdated = updatedAt && updatedAt > thirtySecondsAgo;
 
-          if (isRecentlyUpdated) {
-            console.log(
-              `⏳ Batch ${batchRef.id} was updated recently, still processing...`,
-            );
-            continue;
-          }
-
-          if (activitiesSnap.empty) {
-            console.log(
-              `❌ No activities in batch ${batchRef.id}, deregistering user`,
-            );
-
-            // Get user reference
-            const userId = batchData.userId;
-
-            if (userId) {
-              try {
-                const userDoc = await userId.get();
-
-                if (userDoc.exists) {
-                  const userData = userDoc.data();
-                  const accessToken = userData.access_token;
-
-                  // Deregister from Garmin
-                  if (accessToken) {
-                    try {
-                      await axios.delete(
-                        "https://apis.garmin.com/wellness-api/rest/user/registration",
-                        {
-                          headers: { Authorization: `Bearer ${accessToken}` },
-                        },
-                      );
-                      console.log(
-                        `✅ Deregistered user from Garmin for batch ${batchRef.id}`,
-                      );
-                    } catch (err) {
-                      console.warn(
-                        `Failed to deregister from Garmin for batch ${batchRef.id}:`,
-                        err.response?.data || err.message,
-                      );
-                      // Continue even if deregistration fails
-                    }
-                  }
-
-                  // Clear Garmin tokens from user document
-                  await userId.update({
-                    access_token: admin.firestore.FieldValue.delete(),
-                    refresh_token: admin.firestore.FieldValue.delete(),
-                    garminUserId: admin.firestore.FieldValue.delete(),
-                  });
-
-                  console.log(
-                    `✅ Cleared Garmin data from user for batch ${batchRef.id}`,
-                  );
-                }
-              } catch (err) {
-                console.error(
-                  `Failed to deregister user for batch ${batchRef.id}:`,
-                  err,
-                );
-                // Continue to mark batch as error even if user cleanup fails
-              }
+            if (isRecentlyUpdated) {
+              console.log(
+                  `⏳ Batch ${batchRef.id} was updated recently, still processing...`,
+              );
+              continue;
             }
 
-            // ALWAYS mark batch as error - this should happen regardless of user cleanup success
+            if (activitiesSnap.empty) {
+              console.log(
+                  `❌ No activities in batch ${batchRef.id}, deregistering user`,
+              );
+
+              // Get user reference
+              const userId = batchData.userId;
+
+              if (userId) {
+                try {
+                  const userDoc = await userId.get();
+
+                  if (userDoc.exists) {
+                    const userData = userDoc.data();
+                    const accessToken = userData.access_token;
+
+                    // Deregister from Garmin
+                    if (accessToken) {
+                      try {
+                        await axios.delete(
+                            "https://apis.garmin.com/wellness-api/rest/user/registration",
+                            {
+                              headers: {Authorization: `Bearer ${accessToken}`},
+                            },
+                        );
+                        console.log(
+                            `✅ Deregistered user from Garmin for batch ${batchRef.id}`,
+                        );
+                      } catch (err) {
+                        console.warn(
+                            `Failed to deregister from Garmin for batch ${batchRef.id}:`,
+                            err.response?.data || err.message,
+                        );
+                      // Continue even if deregistration fails
+                      }
+                    }
+
+                    // Clear Garmin tokens from user document
+                    await userId.update({
+                      access_token: admin.firestore.FieldValue.delete(),
+                      refresh_token: admin.firestore.FieldValue.delete(),
+                      garminUserId: admin.firestore.FieldValue.delete(),
+                    });
+
+                    console.log(
+                        `✅ Cleared Garmin data from user for batch ${batchRef.id}`,
+                    );
+                  }
+                } catch (err) {
+                  console.error(
+                      `Failed to deregister user for batch ${batchRef.id}:`,
+                      err,
+                  );
+                // Continue to mark batch as error even if user cleanup fails
+                }
+              }
+
+              // ALWAYS mark batch as error - this should happen regardless of user cleanup success
+              try {
+                await batchRef.update({
+                  status: "error",
+                  processedActivities: 0,
+                  errorMessage:
+                  "No cycling or running activities found in your Garmin account",
+                  completedAt: admin.firestore.FieldValue.serverTimestamp(),
+                });
+                console.log(`✅ Marked batch ${batchRef.id} as error`);
+              } catch (updateErr) {
+                console.error(
+                    `❌ Failed to update batch ${batchRef.id}:`,
+                    updateErr,
+                );
+              }
+            } else {
+              const processedCount = activitiesSnap.size;
+              const expectedCount = batchData.totalActivities || processedCount;
+
+              console.log(
+                  `📊 Batch ${batchRef.id}: ${processedCount}/${expectedCount} activities`,
+              );
+
+              try {
+                if (
+                  processedCount >= expectedCount ||
+                !batchData.totalActivities
+                ) {
+                  console.log(`✅ Marking batch ${batchRef.id} as success`);
+
+                  await batchRef.update({
+                    status: "success",
+                    processedActivities: processedCount,
+                    errorMessage: null,
+                    completedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  });
+                } else {
+                  console.log(
+                      `⚠️ Marking batch ${batchRef.id} as partial success`,
+                  );
+
+                  await batchRef.update({
+                    status: "success",
+                    processedActivities: processedCount,
+                    errorMessage: `Processed ${processedCount} of ${expectedCount} activities`,
+                    completedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  });
+                }
+                console.log(`✅ Updated batch ${batchRef.id} status`);
+              } catch (updateErr) {
+                console.error(
+                    `❌ Failed to update batch ${batchRef.id}:`,
+                    updateErr,
+                );
+              }
+            }
+          } catch (batchErr) {
+            console.error(`❌ Error processing batch ${batchRef.id}:`, batchErr);
+            // Try to mark batch as error anyway
             try {
               await batchRef.update({
                 status: "error",
                 processedActivities: 0,
-                errorMessage:
-                  "No cycling or running activities found in your Garmin account",
+                errorMessage: "Error during cleanup processing",
                 completedAt: admin.firestore.FieldValue.serverTimestamp(),
               });
-              console.log(`✅ Marked batch ${batchRef.id} as error`);
-            } catch (updateErr) {
+              console.log(
+                  `✅ Marked batch ${batchRef.id} as error after exception`,
+              );
+            } catch (fallbackErr) {
               console.error(
-                `❌ Failed to update batch ${batchRef.id}:`,
-                updateErr,
+                  `❌ Failed to mark batch ${batchRef.id} as error:`,
+                  fallbackErr,
               );
             }
-          } else {
-            const processedCount = activitiesSnap.size;
-            const expectedCount = batchData.totalActivities || processedCount;
-
-            console.log(
-              `📊 Batch ${batchRef.id}: ${processedCount}/${expectedCount} activities`,
-            );
-
-            try {
-              if (
-                processedCount >= expectedCount ||
-                !batchData.totalActivities
-              ) {
-                console.log(`✅ Marking batch ${batchRef.id} as success`);
-
-                await batchRef.update({
-                  status: "success",
-                  processedActivities: processedCount,
-                  errorMessage: null,
-                  completedAt: admin.firestore.FieldValue.serverTimestamp(),
-                });
-              } else {
-                console.log(
-                  `⚠️ Marking batch ${batchRef.id} as partial success`,
-                );
-
-                await batchRef.update({
-                  status: "success",
-                  processedActivities: processedCount,
-                  errorMessage: `Processed ${processedCount} of ${expectedCount} activities`,
-                  completedAt: admin.firestore.FieldValue.serverTimestamp(),
-                });
-              }
-              console.log(`✅ Updated batch ${batchRef.id} status`);
-            } catch (updateErr) {
-              console.error(
-                `❌ Failed to update batch ${batchRef.id}:`,
-                updateErr,
-              );
-            }
-          }
-        } catch (batchErr) {
-          console.error(`❌ Error processing batch ${batchRef.id}:`, batchErr);
-          // Try to mark batch as error anyway
-          try {
-            await batchRef.update({
-              status: "error",
-              processedActivities: 0,
-              errorMessage: "Error during cleanup processing",
-              completedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-            console.log(
-              `✅ Marked batch ${batchRef.id} as error after exception`,
-            );
-          } catch (fallbackErr) {
-            console.error(
-              `❌ Failed to mark batch ${batchRef.id} as error:`,
-              fallbackErr,
-            );
           }
         }
-      }
 
-      console.log("✅ Stale batch cleanup completed");
-    } catch (err) {
-      console.error("❌ Error cleaning up stale batches:", err);
-    }
-  },
+        console.log("✅ Stale batch cleanup completed");
+      } catch (err) {
+        console.error("❌ Error cleaning up stale batches:", err);
+      }
+    },
 );
 
 // exports.getRunsByCardiosAndAssessment = onRequest(async (req, res) => {
