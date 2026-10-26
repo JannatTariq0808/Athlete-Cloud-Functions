@@ -53,6 +53,7 @@ const {
   generateRandomString,
   isQuarterFirstMonthDeadline,
   parseFitFile,
+  getValidAccessToken,
 } = require("./utils");
 
 // For cost control, you can set the maximum number of containers that can be
@@ -3209,7 +3210,13 @@ exports.garminCallbackNew = onRequest(
 );
 
 exports.garminWebhook = onRequest(
-    {cors: true, region: "europe-west2", timeoutSeconds: 540, memory: "512MiB"},
+    {
+      cors: true,
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      memory: "512MiB",
+      secrets: [CLIENT_ID, CLIENT_SECRET],
+    },
     async (req, res) => {
       try {
         console.log("✅ Garmin webhook received");
@@ -3380,10 +3387,8 @@ exports.garminWebhook = onRequest(
           const user = userDoc.data();
           const userRef = userDoc.ref;
 
-          // Ensure we have a valid access token (refresh if needed)
-          const accessToken = user.access_token;
-          if (!accessToken) {
-            console.error(`❌ Missing access token for user ${garminUserId}`);
+          if (!user.access_token && !user.refresh_token) {
+            console.error(`❌ Missing Garmin tokens for user ${garminUserId}`);
             continue;
           }
 
@@ -3417,17 +3422,52 @@ exports.garminWebhook = onRequest(
             console.log(`📦 Created new batch: ${batchRef.id}`);
           }
 
+          // Ensure we have a valid access token (refresh if needed)
+          let accessToken;
+          try {
+            accessToken = await getValidAccessToken(
+                userDoc, CLIENT_ID.value(), CLIENT_SECRET.value(),
+            );
+          } catch (err) {
+            const detail = err.response?.data?.error || err.message;
+            console.error(`❌ Could not get a valid Garmin token for ${garminUserId}:`, detail);
+            await batchRef.update({
+              status: "error",
+              processedActivities: 0,
+              errorMessage: `Garmin token refresh failed: ${detail}`,
+              completedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            continue;
+          }
+
+          // Garmin answers 401 when it no longer accepts the token even if the
+          // stored expiry says otherwise, so refresh once more and retry.
+          let refreshedAfterRejection = false;
+          const fetchActivityFile = async (url) => {
+            const get = (token) => axios.get(url, {
+              responseType: "arraybuffer",
+              headers: {Authorization: `Bearer ${token}`},
+            });
+            try {
+              return await get(accessToken);
+            } catch (err) {
+              if (err.response?.status !== 401 || refreshedAfterRejection) throw err;
+              refreshedAfterRejection = true;
+              console.warn("⚠️ Garmin rejected the access token, refreshing once and retrying");
+              accessToken = await getValidAccessToken(
+                  await userRef.get(), CLIENT_ID.value(), CLIENT_SECRET.value(), {force: true},
+              );
+              return get(accessToken);
+            }
+          };
+
           let processedCount = 0;
-          const hasError = false;
-          const errorMessage = null;
+          let failedCount = 0;
 
           // Process each activity
           for (const activity of userActivities) {
             try {
-              const response = await axios.get(activity.callbackURL, {
-                responseType: "arraybuffer",
-                headers: {Authorization: `Bearer ${user.access_token}`},
-              });
+              const response = await fetchActivityFile(activity.callbackURL);
 
               const fitBuffer = Buffer.from(response.data);
               const parsedData = await parseFitFile(fitBuffer);
@@ -3479,6 +3519,7 @@ exports.garminWebhook = onRequest(
                   `⚠️ Failed to process activity ${activity.activityId}:`,
                   err.message,
               );
+              failedCount++;
               // Log the error per activity but don't break
               const errorDocRef = batchRef
                   .collection("activities")
@@ -3494,6 +3535,11 @@ exports.garminWebhook = onRequest(
             }
           }
 
+          const hasError = failedCount > 0;
+          const errorMessage = hasError ?
+            `${failedCount} of ${userActivities.length} activities failed to sync` :
+            null;
+
           await batchRef.update({
             status: hasError ? "error" : "success",
             processedActivities: processedCount,
@@ -3502,7 +3548,8 @@ exports.garminWebhook = onRequest(
           });
 
           console.log(
-              `✅ Batch ${batchRef.id} completed: ${hasError ? "error" : "success"}`,
+              `✅ Batch ${batchRef.id} completed: ${hasError ? "error" : "success"} ` +
+              `(${processedCount} saved, ${failedCount} failed)`,
           );
         }
 

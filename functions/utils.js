@@ -1066,20 +1066,26 @@ const parseFitFile = (fitBuffer) => {
   });
 };
 
-const getValidAccessToken = async (sessionDoc, CLIENT_ID, CLIENT_SECRET) => {
-  const data = sessionDoc.data();
-  const {accessToken, refreshToken, token_expiry} = data;
+// Returns a usable Garmin access token for a user document, refreshing it
+// through Garmin when the stored one has no expiry, is about to expire, or
+// `force` is set (for example after Garmin rejected it with a 401).
+const getValidAccessToken = async (userDoc, clientId, clientSecret, {force = false} = {}) => {
+  const data = userDoc.data() || {};
+  const accessToken = data.access_token;
+  const refreshToken = data.refresh_token;
+  const expiry = data.token_expiry;
+  const expiryMs = expiry ? (expiry.toDate ? expiry.toDate() : new Date(expiry)).getTime() : 0;
+  const expiresSoon = expiryMs < Date.now() + 60 * 1000;
 
-  const now = new Date();
-
-  // Check if the token is still valid
-  if (token_expiry && now < token_expiry.toDate()) {
-    // Token is still valid
+  if (accessToken && !force && !expiresSoon) {
     return accessToken;
   }
 
-  // Token expired — refresh it
-  console.log("Access token expired, refreshing...");
+  if (!refreshToken) {
+    throw new Error("No Garmin refresh token stored for user");
+  }
+
+  console.log(`Refreshing Garmin access token for user ${userDoc.id}`);
 
   const tokenRes = await axios.post(
       "https://diauth.garmin.com/di-oauth2-service/oauth/token",
@@ -1089,26 +1095,26 @@ const getValidAccessToken = async (sessionDoc, CLIENT_ID, CLIENT_SECRET) => {
       }),
       {
         auth: {
-          username: CLIENT_ID,
-          password: CLIENT_SECRET,
+          username: clientId,
+          password: clientSecret,
         },
         headers: {"Content-Type": "application/x-www-form-urlencoded"},
       },
   );
 
   const {access_token, refresh_token, expires_in} = tokenRes.data;
+  const newExpiry = admin.firestore.Timestamp.fromDate(
+      new Date(Date.now() + expires_in * 1000),
+  );
 
-  // Update Firestore with new token & expiry
-  const newExpiry = new Date(Date.now() + expires_in * 1000);
-
-  await sessionDoc.ref.update({
-    accessToken: access_token,
-    refreshToken: refresh_token,
+  await userDoc.ref.update({
+    access_token,
+    refresh_token: refresh_token || refreshToken,
     token_expiry: newExpiry,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  console.log("Access token refreshed, new expiry:", newExpiry);
+  console.log("Garmin access token refreshed, new expiry:", newExpiry.toDate());
 
   return access_token;
 };
