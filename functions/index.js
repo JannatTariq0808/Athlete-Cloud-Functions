@@ -2945,6 +2945,35 @@ exports.getAllLeadsForCsv = onRequest(
 //     },
 // );
 
+// The redirect URI must match what is registered in the Garmin developer
+// portal for each project's client ID, so it is resolved per project rather
+// than hardcoded to production.
+const GARMIN_CALLBACK_URLS = {
+  "athlete-46037": "https://garmincallbacknew-yoyi2vtgca-nw.a.run.app",
+  "athlete-staging": "https://garmincallbacknew-4vulof74ma-nw.a.run.app",
+};
+
+// How long a saved OAuth state stays valid for the callback to use or reuse.
+const GARMIN_STATE_TTL_MS = 30 * 60 * 1000;
+
+const getProjectId = () => {
+  if (process.env.GCLOUD_PROJECT) return process.env.GCLOUD_PROJECT;
+  try {
+    return JSON.parse(process.env.FIREBASE_CONFIG || "{}").projectId || null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const getGarminCallbackUrl = () => {
+  const projectId = getProjectId();
+  if (projectId && GARMIN_CALLBACK_URLS[projectId]) {
+    return GARMIN_CALLBACK_URLS[projectId];
+  }
+  console.warn(`No Garmin callback URL mapped for project ${projectId}, using default`);
+  return `https://europe-west2-${projectId}.cloudfunctions.net/garminCallbackNew`;
+};
+
 exports.garminStartNew = onRequest(
     {cors: true, region: "europe-west2", secrets: [CLIENT_ID]},
     async (req, res) => {
@@ -2970,8 +2999,11 @@ exports.garminStartNew = onRequest(
           appRedirectUri,
           codeVerifier,
           userRefPath: userRef.path,
+          status: "pending",
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+        const callbackUrl = getGarminCallbackUrl();
 
         const authUrl =
         `https://connect.garmin.com/oauth2Confirm?` +
@@ -2979,9 +3011,7 @@ exports.garminStartNew = onRequest(
         `client_id=${CLIENT_ID.value()}&` +
         `code_challenge=${codeChallenge}&` +
         `code_challenge_method=S256&` +
-        `redirect_uri=${encodeURIComponent(
-            "https://garmincallbacknew-yoyi2vtgca-nw.a.run.app",
-        )}&` +
+        `redirect_uri=${encodeURIComponent(callbackUrl)}&` +
         `state=${state}`;
 
         console.log("Redirecting to Garmin auth URL:", authUrl);
@@ -2997,44 +3027,76 @@ exports.garminCallbackNew = onRequest(
     {cors: true, region: "europe-west2", secrets: [CLIENT_ID, CLIENT_SECRET]},
     async (req, res) => {
       const DEFAULT_APP_REDIRECT = "athlete://athlete.com/GarminConnect";
+      let redirectBase = DEFAULT_APP_REDIRECT;
+      let docRef = null;
+
+      const redirectWithError = (message) =>
+        res.redirect(`${redirectBase}?error=${encodeURIComponent(message)}`);
+
+      const markState = async (fields) => {
+        if (!docRef) return;
+        try {
+          await docRef.update({
+            ...fields,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch (e) {
+          console.warn("Could not update Garmin OAuth state:", e.message);
+        }
+      };
 
       try {
-        console.log("garminCallback called with query:", req.query);
         const {code, state, error} = req.query;
+        console.log("garminCallback called:", {state, hasCode: Boolean(code), error});
 
         if (!state) {
-          return res.redirect(
-              `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid OAuth state")}`,
-          );
+          return redirectWithError("Invalid OAuth state");
         }
 
-        const docRef = admin
-            .firestore()
-            .collection("garminOauthStates")
-            .doc(state);
+        docRef = admin.firestore().collection("garminOauthStates").doc(state);
         const doc = await docRef.get();
 
         if (!doc.exists) {
-          return res.redirect(
-              `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid OAuth session")}`,
-          );
+          console.warn(`Garmin OAuth state ${state} not found`);
+          return redirectWithError("Invalid OAuth session");
         }
 
-        const {codeVerifier, appRedirectUri, userRefPath} = doc.data();
+        const {
+          codeVerifier,
+          appRedirectUri,
+          userRefPath,
+          createdAt,
+          status,
+          batchId,
+        } = doc.data();
+        redirectBase = appRedirectUri || DEFAULT_APP_REDIRECT;
         const userRef = admin.firestore().doc(userRefPath);
 
+        // Garmin reuses the same state when the user taps Agree again, so a
+        // state that already completed just sends the app back to its batch.
+        if (status === "completed" && batchId) {
+          console.log(`Garmin OAuth state ${state} reused after success, batch ${batchId}`);
+          return res.redirect(`${redirectBase}?batchId=${batchId}`);
+        }
+
+        if (createdAt && createdAt.toMillis() < Date.now() - GARMIN_STATE_TTL_MS) {
+          console.warn(`Garmin OAuth state ${state} expired`);
+          await markState({status: "expired"});
+          return redirectWithError("Session expired - Please try again");
+        }
+
         if (error) {
-          await docRef.delete();
-          return res.redirect(
-              `${appRedirectUri}?error=${encodeURIComponent("Access Denied")}`,
-          );
+          console.warn("Garmin returned OAuth error:", error);
+          await markState({status: "failed", lastError: String(error)});
+          return redirectWithError("Access Denied");
         }
 
         if (!code) {
-          return res.redirect(
-              `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Invalid authorization code")}`,
-          );
+          await markState({status: "failed", lastError: "missing_code"});
+          return redirectWithError("Invalid authorization code");
         }
+
+        await markState({status: "in_progress"});
 
         // Exchange token
         const tokenRes = await axios.post(
@@ -3042,7 +3104,7 @@ exports.garminCallbackNew = onRequest(
             new URLSearchParams({
               grant_type: "authorization_code",
               code,
-              redirect_uri: "https://garmincallbacknew-yoyi2vtgca-nw.a.run.app",
+              redirect_uri: getGarminCallbackUrl(),
               code_verifier: codeVerifier,
             }),
             {
@@ -3079,7 +3141,7 @@ exports.garminCallbackNew = onRequest(
           token_expiry: tokenExpiry,
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 3000)); // 2 seconds
+        await new Promise((resolve) => setTimeout(resolve, 3000));
 
         // Check permissions
         const permissionsRes = await axios.get(
@@ -3096,13 +3158,9 @@ exports.garminCallbackNew = onRequest(
             refresh_token: admin.firestore.FieldValue.delete(),
           });
 
-          await docRef.delete();
+          await markState({status: "failed", lastError: "missing_historical_permission"});
 
-          return res.redirect(
-              `${appRedirectUri}?error=${encodeURIComponent(
-                  "Missing Historical Data Permission",
-              )}`,
-          );
+          return redirectWithError("Missing Historical Data Permission");
         }
 
         // 🔥 ONLY NOW create batch
@@ -3134,14 +3192,18 @@ exports.garminCallbackNew = onRequest(
             },
         );
 
-        await docRef.delete();
+        // Keep the state so a repeated callback with the same state can
+        // return the app to this batch instead of failing.
+        await markState({status: "completed", batchId: batchRef.id});
 
-        return res.redirect(`${appRedirectUri}?batchId=${batchRef.id}`);
+        return res.redirect(`${redirectBase}?batchId=${batchRef.id}`);
       } catch (err) {
         console.error("Garmin OAuth failed:", err.response?.data || err);
-        return res.redirect(
-            `${DEFAULT_APP_REDIRECT}?error=${encodeURIComponent("Connection failed")}`,
-        );
+        await markState({
+          status: "failed",
+          lastError: String(err.response?.data?.error || err.message || err),
+        });
+        return redirectWithError("Connection failed");
       }
     },
 );
