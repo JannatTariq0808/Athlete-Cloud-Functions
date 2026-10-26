@@ -3179,14 +3179,14 @@ exports.garminCallbackNew = onRequest(
 
         // Request backfill FIRST
         const nowSec = Math.floor(Date.now() / 1000);
-        const sevenDaysAgoSec = nowSec - 7 * 24 * 60 * 60;
+        const thirtyDaysAgoSec = nowSec - 30 * 24 * 60 * 60;
 
         await axios.get(
             "https://apis.garmin.com/wellness-api/rest/backfill/activities",
             {
               params: {
                 userId: garminUserId,
-                summaryStartTimeInSeconds: sevenDaysAgoSec,
+                summaryStartTimeInSeconds: thirtyDaysAgoSec,
                 summaryEndTimeInSeconds: nowSec,
               },
               headers: {Authorization: `Bearer ${access_token}`},
@@ -4022,6 +4022,10 @@ exports.getGarminTokens = onRequest(
  * Scheduled function to clean up stale processing batches
  * Runs every 1 minute
  */
+// Garmin delivers backfill files asynchronously, often minutes after the
+// request, so an empty batch is only treated as "no activities" after this.
+const EMPTY_BATCH_GRACE_MS = 30 * 60 * 1000;
+
 exports.cleanupStaleBatches = onSchedule(
     {
       schedule: "*/1 * * * *",
@@ -4075,8 +4079,16 @@ exports.cleanupStaleBatches = onSchedule(
             }
 
             if (activitiesSnap.empty) {
+              const ageMs = now.toMillis() - (batchData.created_at?.toMillis() || 0);
+              if (ageMs < EMPTY_BATCH_GRACE_MS) {
+                console.log(
+                    `⏳ Batch ${batchRef.id} has no activities yet, waiting for Garmin backfill`,
+                );
+                continue;
+              }
+
               console.log(
-                  `❌ No activities in batch ${batchRef.id}, deregistering user`,
+                  `❌ No activities in batch ${batchRef.id} after ${Math.round(ageMs / 60000)} min, deregistering user`,
               );
 
               // Get user reference
