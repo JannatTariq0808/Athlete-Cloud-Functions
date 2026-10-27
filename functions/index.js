@@ -54,6 +54,8 @@ const {
   isQuarterFirstMonthDeadline,
   parseFitFile,
   getValidAccessToken,
+  garminRefreshTokenExpiry,
+  GARMIN_REFRESH_TOKEN_TTL_SEC,
   GARMIN_RECONNECT_MESSAGE,
   disconnectGarminUser,
 } = require("./utils");
@@ -3119,7 +3121,7 @@ exports.garminCallbackNew = onRequest(
             },
         );
 
-        const {access_token, refresh_token, expires_in} = tokenRes.data;
+        const {access_token, refresh_token, expires_in, refresh_token_expires_in} = tokenRes.data;
 
         // Get Garmin user ID
         let garminUserId = null;
@@ -3142,6 +3144,9 @@ exports.garminCallbackNew = onRequest(
           access_token,
           refresh_token,
           token_expiry: tokenExpiry,
+          refresh_token_expiry: garminRefreshTokenExpiry(refresh_token_expires_in),
+          garmin_token_refreshed_at: admin.firestore.FieldValue.serverTimestamp(),
+          garmin_error: admin.firestore.FieldValue.delete(),
         });
 
         await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -4025,6 +4030,103 @@ exports.getGarminTokens = onRequest(
     },
 );
 
+// Garmin refresh tokens expire about three months after they were issued, and
+// a user who only syncs at each assessment can easily go longer than that
+// between syncs. This job runs daily and rotates every refresh token that is
+// within two weeks of expiring, so the connection stays alive without the user
+// doing anything. Garmin returns a fresh refresh token on every rotation.
+const GARMIN_REFRESH_AHEAD_MS = 14 * 24 * 60 * 60 * 1000;
+const ACCESS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Users connected before we started storing refresh_token_expiry: the access
+// token lasts a day, so token_expiry minus a day is roughly when the refresh
+// token was issued, and it lives for the default Garmin lifetime after that.
+const estimateRefreshTokenExpiryMs = (data) => {
+  if (data.refresh_token_expiry) {
+    const value = data.refresh_token_expiry;
+    return (value.toDate ? value.toDate() : new Date(value)).getTime();
+  }
+  if (data.token_expiry) {
+    const value = data.token_expiry;
+    const issuedMs = (value.toDate ? value.toDate() : new Date(value)).getTime() - ACCESS_TOKEN_TTL_MS;
+    return issuedMs + GARMIN_REFRESH_TOKEN_TTL_SEC * 1000;
+  }
+  return 0;
+};
+
+exports.refreshGarminTokens = onSchedule(
+    {
+      schedule: "0 3 * * *",
+      timeZone: "Europe/London",
+      region: "europe-west2",
+      timeoutSeconds: 540,
+      secrets: [CLIENT_ID, CLIENT_SECRET],
+    },
+    async () => {
+      const db = admin.firestore();
+      const now = Date.now();
+      const refreshBefore = now + GARMIN_REFRESH_AHEAD_MS;
+
+      const usersSnap = await db
+          .collection("users")
+          .where("refresh_token", ">", "")
+          .get();
+
+      console.log(`🔄 Garmin token refresh: ${usersSnap.size} users hold a refresh token`);
+
+      let refreshed = 0;
+      let rejected = 0;
+      let failed = 0;
+      let skipped = 0;
+
+      for (const userDoc of usersSnap.docs) {
+        const data = userDoc.data() || {};
+        const expiryMs = estimateRefreshTokenExpiryMs(data);
+
+        if (expiryMs > refreshBefore) {
+          skipped++;
+          continue;
+        }
+
+        const expiryLabel = expiryMs ? new Date(expiryMs).toISOString() : "unknown";
+        console.log(`Refreshing Garmin tokens for user ${userDoc.id} (refresh token expires ${expiryLabel})`);
+
+        try {
+          await getValidAccessToken(userDoc, CLIENT_ID.value(), CLIENT_SECRET.value(), {force: true});
+          refreshed++;
+        } catch (err) {
+          const status = err.status;
+          if (status === 400 || status === 401) {
+            // Garmin no longer accepts this refresh token: it expired or the
+            // user revoked access. Clear the connection so the app asks them
+            // to reconnect, and keep the reason on the user document.
+            rejected++;
+            console.warn(`Garmin rejected refresh token for user ${userDoc.id} (${status}), disconnecting`);
+            try {
+              await disconnectGarminUser({userRef: userDoc.ref, accessToken: data.access_token});
+              await userDoc.ref.update({
+                garmin_error: GARMIN_RECONNECT_MESSAGE,
+                garmin_error_at: admin.firestore.FieldValue.serverTimestamp(),
+              });
+            } catch (cleanupErr) {
+              console.error(`Could not disconnect user ${userDoc.id}:`, cleanupErr.message);
+            }
+          } else {
+            // Network or Garmin-side problem: leave the token in place and
+            // retry on the next daily run.
+            failed++;
+            console.error(`Garmin token refresh failed for user ${userDoc.id}, will retry tomorrow:`, err.message);
+          }
+        }
+      }
+
+      console.log(
+          `🔄 Garmin token refresh done: ${refreshed} refreshed, ${rejected} rejected and disconnected, ` +
+          `${failed} failed, ${skipped} not due yet`,
+      );
+    },
+);
+
 /**
  * Scheduled function to clean up stale processing batches
  * Runs every 1 minute
@@ -4032,7 +4134,6 @@ exports.getGarminTokens = onRequest(
 // Garmin delivers backfill files asynchronously, often minutes after the
 // request, so an empty batch is only treated as "no activities" after this.
 const EMPTY_BATCH_GRACE_MS = 30 * 60 * 1000;
-
 exports.cleanupStaleBatches = onSchedule(
     {
       schedule: "*/1 * * * *",

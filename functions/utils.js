@@ -1066,6 +1066,16 @@ const parseFitFile = (fitBuffer) => {
   });
 };
 
+// Garmin refresh tokens last about three months. Garmin reports the exact
+// lifetime as refresh_token_expires_in; fall back to 90 days when it is absent.
+const GARMIN_REFRESH_TOKEN_TTL_SEC = 90 * 24 * 60 * 60;
+const garminRefreshTokenExpiry = (refreshTokenExpiresIn) => {
+  const seconds = Number(refreshTokenExpiresIn) > 0 ?
+    Number(refreshTokenExpiresIn) :
+    GARMIN_REFRESH_TOKEN_TTL_SEC;
+  return admin.firestore.Timestamp.fromDate(new Date(Date.now() + seconds * 1000));
+};
+
 // Returns a usable Garmin access token for a user document, refreshing it
 // through Garmin when the stored one has no expiry, is about to expire, or
 // `force` is set (for example after Garmin rejected it with a 401).
@@ -1107,21 +1117,27 @@ const getValidAccessToken = async (userDoc, clientId, clientSecret, {force = fal
     const status = err.response?.status;
     const body = err.response?.data;
     console.error(`Garmin token refresh failed for user ${userDoc.id}:`, status, body || err.message);
-    throw new Error(
+    const error = new Error(
         `Garmin token refresh failed${status ? ` (${status})` : ""}: ` +
         (body ? JSON.stringify(body) : err.message),
     );
+    error.status = status;
+    throw error;
   }
 
-  const {access_token, refresh_token, expires_in} = tokenRes.data;
+  const {access_token, refresh_token, expires_in, refresh_token_expires_in} = tokenRes.data;
   const newExpiry = admin.firestore.Timestamp.fromDate(
       new Date(Date.now() + expires_in * 1000),
   );
+  const newRefreshExpiry = garminRefreshTokenExpiry(refresh_token_expires_in);
 
   await userDoc.ref.update({
     access_token,
     refresh_token: refresh_token || refreshToken,
     token_expiry: newExpiry,
+    refresh_token_expiry: newRefreshExpiry,
+    garmin_token_refreshed_at: admin.firestore.FieldValue.serverTimestamp(),
+    garmin_error: admin.firestore.FieldValue.delete(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
@@ -1164,6 +1180,7 @@ const disconnectGarminUser = async ({userRef, accessToken}) => {
     access_token: admin.firestore.FieldValue.delete(),
     refresh_token: admin.firestore.FieldValue.delete(),
     token_expiry: admin.firestore.FieldValue.delete(),
+    refresh_token_expiry: admin.firestore.FieldValue.delete(),
     garminUserId: admin.firestore.FieldValue.delete(),
   });
   console.log(
@@ -1344,6 +1361,8 @@ module.exports = {
   isQuarterFirstMonthDeadline,
   parseFitFile,
   getValidAccessToken,
+  garminRefreshTokenExpiry,
+  GARMIN_REFRESH_TOKEN_TTL_SEC,
   GARMIN_RECONNECT_MESSAGE,
   deregisterFromGarmin,
   disconnectGarminUser,
