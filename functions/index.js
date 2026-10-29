@@ -3571,13 +3571,16 @@ exports.garminWebhook = onRequest(
               const fitBuffer = Buffer.from(response.data);
               const parsedData = await parseFitFile(fitBuffer);
 
-              // Start comes from the FIT file (falling back to Garmin's push
-              // payload); end is start plus the elapsed time of the activity.
+              // Start and end are the first and last record timestamps in the
+              // FIT file. Fall back to Garmin's push payload for the start and
+              // to start plus elapsed time for the end when the file lacks them.
               const startMs = parsedData.activityDate ?
                 parsedData.activityDate.getTime() :
                 (activity.startTimeInSeconds ? activity.startTimeInSeconds * 1000 : null);
               const elapsedSec = parsedData.elapsedTime || parsedData.duration || 0;
-              const endMs = startMs !== null ? startMs + elapsedSec * 1000 : null;
+              const endMs = parsedData.activityEndDate ?
+                parsedData.activityEndDate.getTime() :
+                (startMs !== null ? startMs + elapsedSec * 1000 : null);
               console.log(
                   `🕒 Activity ${activity.activityId} (${activity.activityType}): ` +
                   `start ${startMs !== null ? new Date(startMs).toISOString() : "unknown"}, ` +

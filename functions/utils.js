@@ -1052,6 +1052,7 @@ const parseFitFile = (fitBuffer) => {
 
       resolve({
         activityDate: activityStartTime,
+        activityEndDate: lastTimestamp ? new Date(lastTimestamp) : null,
         avgPower,
         maxPower,
         avgHr,
