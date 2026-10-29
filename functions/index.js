@@ -58,6 +58,7 @@ const {
   GARMIN_REFRESH_TOKEN_TTL_SEC,
   GARMIN_RECONNECT_MESSAGE,
   disconnectGarminUser,
+  deleteAllGarminBatchesForUser,
 } = require("./utils");
 
 // For cost control, you can set the maximum number of containers that can be
@@ -3171,6 +3172,10 @@ exports.garminCallbackNew = onRequest(
           return redirectWithError("Missing Historical Data Permission");
         }
 
+        // The app watches a single batch per user, so remove any batch left
+        // over from an earlier connection before creating the new one.
+        await deleteAllGarminBatchesForUser({userRef});
+
         // 🔥 ONLY NOW create batch
         const batchRef = admin.firestore().collection("garminSyncBatches").doc();
 
@@ -3215,6 +3220,32 @@ exports.garminCallbackNew = onRequest(
       }
     },
 );
+
+const toMillis = (value) => {
+  if (!value) return 0;
+  const date = value.toDate ? value.toDate() : new Date(value);
+  const ms = date.getTime();
+  return Number.isNaN(ms) ? 0 : ms;
+};
+
+// The same Garmin account can end up on more than one user document (an old
+// account, a re-registration). Garmin only honours the most recently issued
+// tokens, so pick the document that still holds tokens and got them last.
+const pickFreshestGarminUser = (docs) => {
+  const scored = docs.map((doc) => {
+    const data = doc.data() || {};
+    const hasTokens = Boolean(data.access_token || data.refresh_token);
+    const issuedAt = Math.max(toMillis(data.garmin_token_refreshed_at), toMillis(data.token_expiry));
+    return {doc, hasTokens, issuedAt};
+  });
+  scored.sort((a, b) => (Number(b.hasTokens) - Number(a.hasTokens)) || (b.issuedAt - a.issuedAt));
+  if (docs.length > 1) {
+    console.warn(
+        `⚠️ ${docs.length} user docs share Garmin user ${docs[0].data().garminUserId}, using ${scored[0].doc.id}`,
+    );
+  }
+  return scored[0].doc;
+};
 
 exports.garminWebhook = onRequest(
     {
@@ -3368,7 +3399,6 @@ exports.garminWebhook = onRequest(
           const userSnap = await db
               .collection("users")
               .where("garminUserId", "==", garminUserId)
-              .limit(1)
               .get();
 
           if (userSnap.empty) {
@@ -3376,7 +3406,7 @@ exports.garminWebhook = onRequest(
             continue;
           }
 
-          const userDoc = userSnap.docs[0];
+          const userDoc = pickFreshestGarminUser(userSnap.docs);
           const user = userDoc.data();
           const userRef = userDoc.ref;
 
@@ -3402,6 +3432,10 @@ exports.garminWebhook = onRequest(
             });
             console.log(`⚠️ Using existing batch: ${batchRef.id}`);
           } else {
+            // No batch in progress: anything left for this user is finished
+            // and would only confuse the app, which watches one batch per user.
+            await deleteAllGarminBatchesForUser({userRef});
+
             batchRef = db.collection("garminSyncBatches").doc();
             await batchRef.set({
               userId: userRef,
@@ -4134,6 +4168,49 @@ exports.refreshGarminTokens = onSchedule(
 // Garmin delivers backfill files asynchronously, often minutes after the
 // request, so an empty batch is only treated as "no activities" after this.
 const EMPTY_BATCH_GRACE_MS = 30 * 60 * 1000;
+
+// Finished batches are only read by the app right after the connect flow.
+// Anything older than this is removed so the collection does not pile up.
+const FINISHED_BATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
+const FINISHED_BATCH_PURGE_LIMIT = 50;
+
+const deleteBatchWithActivities = async (batchRef) => {
+  const activitiesSnap = await batchRef.collection("activities").get();
+  const refs = [...activitiesSnap.docs.map((doc) => doc.ref), batchRef];
+  for (let i = 0; i < refs.length; i += 400) {
+    const writeBatch = admin.firestore().batch();
+    refs.slice(i, i + 400).forEach((ref) => writeBatch.delete(ref));
+    await writeBatch.commit();
+  }
+  return activitiesSnap.size;
+};
+
+const purgeFinishedBatches = async (db, now) => {
+  const cutoff = admin.firestore.Timestamp.fromMillis(
+      now.toMillis() - FINISHED_BATCH_RETENTION_MS,
+  );
+  const finishedSnap = await db
+      .collection("garminSyncBatches")
+      .where("completedAt", "<=", cutoff)
+      .limit(FINISHED_BATCH_PURGE_LIMIT)
+      .get();
+
+  let deleted = 0;
+  for (const batchDoc of finishedSnap.docs) {
+    const status = batchDoc.data().status;
+    if (status === "processing") continue;
+    try {
+      const activityCount = await deleteBatchWithActivities(batchDoc.ref);
+      deleted++;
+      console.log(`🗑️ Deleted ${status} batch ${batchDoc.id} (${activityCount} activities)`);
+    } catch (err) {
+      console.error(`❌ Failed to delete batch ${batchDoc.id}:`, err.message);
+    }
+  }
+  if (deleted > 0) {
+    console.log(`🗑️ Purged ${deleted} finished batches older than 24h`);
+  }
+};
 exports.cleanupStaleBatches = onSchedule(
     {
       schedule: "*/1 * * * *",
@@ -4147,6 +4224,12 @@ exports.cleanupStaleBatches = onSchedule(
 
         const db = admin.firestore();
         const now = admin.firestore.Timestamp.now();
+
+        try {
+          await purgeFinishedBatches(db, now);
+        } catch (err) {
+          console.error("❌ Failed to purge finished batches:", err.message);
+        }
 
         const ninetySecondsAgo = admin.firestore.Timestamp.fromMillis(
             now.toMillis() - 30 * 1000,
