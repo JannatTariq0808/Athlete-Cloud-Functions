@@ -2298,15 +2298,23 @@ exports.getPolicyAvailableAmount = onRequest(
     },
     async (req, res) => {
       try {
-      // Handle preflight CORS request
         if (req.method === "OPTIONS") {
           return res.status(204).send("");
         }
 
-        // Firebase ID Token authentication
+        if (req.method !== "GET") {
+          return res.status(405).json({
+            error: "Only GET requests allowed",
+          });
+        }
+
+        // Firebase ID token authentication
         const authorizationHeader = req.headers.authorization;
-        if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
-          console.warn("Unauthorized: No Firebase ID token found.");
+
+        if (
+          !authorizationHeader ||
+        !authorizationHeader.startsWith("Bearer ")
+        ) {
           return res.status(401).json({
             error: "Unauthorized",
             message: "Bearer token required.",
@@ -2314,37 +2322,91 @@ exports.getPolicyAvailableAmount = onRequest(
         }
 
         const idToken = authorizationHeader.split("Bearer ")[1];
+
         try {
           await admin.auth().verifyIdToken(idToken);
         } catch (err) {
-          console.warn("Unauthorized: Invalid Firebase ID token.", err);
           return res.status(401).json({
             error: "Unauthorized",
             message: "Invalid Firebase ID token.",
           });
         }
 
-        // Validate input
-        const policyId = req.query.policyId;
-        if (!policyId) return res.status(400).send("Missing policyId");
+        // Accept either policyId or multiple policyIds
+        let policyIds = [];
 
-        // Fetch policy document
-        const doc = await admin
-            .firestore()
-            .collection("policies")
-            .doc(policyId)
-            .get();
-        if (!doc.exists) return res.status(404).send("Policy not found");
+        if (req.query.policyIds) {
+          policyIds = Array.isArray(req.query.policyIds) ?
+          req.query.policyIds :
+          String(req.query.policyIds).split(",");
+        } else if (req.query.policyId) {
+          policyIds = [String(req.query.policyId)];
+        }
 
-        const data = doc.data();
+        policyIds = [
+          ...new Set(
+              policyIds
+                  .map((id) => String(id).trim())
+                  .filter(Boolean),
+          ),
+        ];
 
-        // Ensure availableAmount and monthly_price are doubles
-        const availableAmount = Number(data.availableAmount ?? 0);
+        if (policyIds.length === 0) {
+          return res.status(400).json({
+            error: "Missing policyId or policyIds",
+          });
+        }
 
-        return res.status(200).json({availableAmount});
+        const db = admin.firestore();
+
+        // Fetch all policies
+        const results = await Promise.all(
+            policyIds.map(async (policyId) => {
+              const doc = await db
+                  .collection("policies")
+                  .doc(policyId)
+                  .get();
+
+              if (!doc.exists) {
+                return {
+                  policyId,
+                  found: false,
+                  availableAmount: 0,
+                };
+              }
+
+              const data = doc.data();
+
+              return {
+                policyId: doc.id,
+                found: true,
+                availableAmount: Number(data.availableAmount ?? 0),
+              };
+            }),
+        );
+
+        const totalAvailableAmount = results.reduce(
+            (total, policy) => total + policy.availableAmount,
+            0,
+        );
+
+        const missingPolicyIds = results
+            .filter((policy) => !policy.found)
+            .map((policy) => policy.policyId);
+
+        return res.status(200).json({
+          totalAvailableAmount,
+          count: results.filter((policy) => policy.found).length,
+          policies: results,
+          missingPolicyIds,
+        });
       } catch (error) {
-        console.error("❌ Error fetching policy:", error);
-        return res.status(500).send("Error fetching policy: " + error.message);
+        console.error("Error fetching policy amounts:", error);
+
+        return res.status(500).json({
+          error: "Error fetching policy amounts",
+          message: error.message,
+        });
       }
     },
 );
@@ -4796,3 +4858,63 @@ exports.cleanupStaleBatches = onSchedule(
 //     return res.status(500).send("Error: " + error.message);
 //   }
 // });
+
+
+exports.getPolicySummary = onRequest(async (req, res) => {
+  try {
+    if (req.method !== "GET") {
+      return res.status(405).send("Only GET requests allowed");
+    }
+
+    const userEmail = req.query.userEmail;
+
+    if (!userEmail) {
+      return res.status(400).send("Missing userEmail parameter");
+    }
+
+    const db = admin.firestore();
+    const now = Timestamp.now();
+
+    const snapshot = await db
+        .collection("policies")
+        .where("user_email", "==", userEmail)
+        .where("status", "==", "Active")
+        .where("starting_date", "<=", now)
+        .where("ending_date", ">=", now)
+        .get();
+
+    let totalAvailable = 0;
+    let totalPending = 0;
+    let totalMonthlyPrice = 0;
+
+    const policyRefs = [];
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+
+      totalAvailable += Number(data.availableAmount ?? 0);
+      totalPending += Number(data.pendingAmount ?? 0);
+      totalMonthlyPrice += Number(data.monthly_price ?? 0);
+
+      policyRefs.push(doc.ref.path);
+    }
+
+    console.log(
+        `Found ${snapshot.size} active policies for ${userEmail}`,
+    );
+
+    return res.status(200).json({
+      totalAvailable,
+      totalPending,
+      totalMonthlyPrice,
+      policyRefs,
+      count: snapshot.size,
+      hasActivePolicy: !snapshot.empty,
+    });
+  } catch (error) {
+    console.error("Error fetching policy summary:", error);
+    return res.status(500).send(
+        "Error fetching policy summary: " + error.message,
+    );
+  }
+});
